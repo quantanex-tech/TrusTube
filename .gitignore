@@ -1,0 +1,24 @@
+.gradle/
+**/build/
+local.properties
+out/
+.idea/
+*.iml
+.toolchain/
+
+# Local agent/workflow state and credentials are not publication inputs.
+/.agents/
+/.codex/
+/.aws/
+/.ssh/
+/AGENTS.md
+/project/
+.env
+.env.*
+*.keystore
+*.jks
+*.p12
+*.pfx
+*.pem
+*.mobileprovision
+.DS_Store

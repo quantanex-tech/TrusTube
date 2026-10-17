@@ -1,0 +1,71 @@
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'dev.trustedvideos.proof'
+    compileSdk 36
+    defaultConfig {
+        applicationId 'dev.trustedvideos.proof'
+        minSdk 23
+        targetSdk 36
+        versionCode 3
+        versionName '0.3.0-alpha.1'
+        testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
+    }
+    buildTypes {
+        release {
+            // This prototype uses a test key so its R8 build can be installed for device verification.
+            signingConfig signingConfigs.debug
+            minifyEnabled true
+            shrinkResources true
+            proguardFiles getDefaultProguardFile('proguard-android-optimize.txt'), 'proguard-rules.pro'
+        }
+    }
+    compileOptions {
+        coreLibraryDesugaringEnabled true
+        sourceCompatibility JavaVersion.VERSION_17
+        targetCompatibility JavaVersion.VERSION_17
+    }
+    packaging {
+        resources {
+            merges += ['META-INF/LICENSE*', 'META-INF/NOTICE*']
+            excludes += ['META-INF/DEPENDENCIES', 'META-INF/versions/9/OSGI-INF/MANIFEST.MF']
+        }
+    }
+    lint { abortOnError true }
+    testOptions { unitTests.includeAndroidResources = true }
+    sourceSets.main.assets.srcDir rootProject.file('licenses')
+}
+
+dependencyLocking { lockAllConfigurations() }
+
+dependencies {
+    implementation('com.github.teamnewpipe:NewPipeExtractor:v0.26.5') {
+        // The extractor uses Rhino Context in interpreted mode, not the desktop JSR-223 engine.
+        exclude group: 'org.mozilla', module: 'rhino-engine'
+    }
+    implementation 'androidx.media3:media3-exoplayer:1.11.1'
+    implementation 'androidx.media3:media3-exoplayer-dash:1.11.1'
+    implementation 'androidx.media3:media3-exoplayer-hls:1.11.1'
+    implementation 'androidx.media3:media3-ui:1.11.1'
+    implementation 'com.squareup.okhttp3:okhttp:4.12.0'
+    coreLibraryDesugaring 'com.android.tools:desugar_jdk_libs_nio:2.1.5'
+    testImplementation 'junit:junit:4.13.2'
+    testImplementation 'org.robolectric:robolectric:4.17'
+}
+
+tasks.register('extractionProbe', JavaExec) {
+    dependsOn 'compileDebugJavaWithJavac'
+    classpath = files(layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes')) +
+            configurations.debugRuntimeClasspath.filter { it.name.endsWith('.jar') }
+    mainClass = 'dev.trustedvideos.proof.source.ExtractionProbe'
+    args = [providers.gradleProperty('probeChannel').getOrElse('@CrunchLabs'),
+            providers.gradleProperty('probeVideo').getOrElse('')]
+}
+
+tasks.register('channelSearchProbe', JavaExec) {
+    dependsOn 'compileDebugJavaWithJavac'
+    classpath = files(layout.buildDirectory.dir('intermediates/javac/debug/compileDebugJavaWithJavac/classes')) +
+            configurations.debugRuntimeClasspath.filter { it.name.endsWith('.jar') }
+    mainClass = 'dev.trustedvideos.proof.source.ChannelSearchProbe'
+    args = [providers.gradleProperty('searchTerm').getOrElse('checker tobi')]
+}

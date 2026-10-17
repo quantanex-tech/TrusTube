@@ -1,0 +1,46 @@
+TrusTube — third-party notices
+
+Application code: GPL-3.0-or-later.
+Source and build instructions: https://github.com/quantanex-tech/TrusTube
+
+NewPipeExtractor v0.26.5 — GPL-3.0-or-later
+https://github.com/TeamNewPipe/NewPipeExtractor/tree/v0.26.5
+
+Basil Icons — Craftwork — CC BY 4.0
+Original collection: https://www.figma.com/community/file/931906394678748246
+Creator: https://craftwork.design/product/basil
+License: https://creativecommons.org/licenses/by/4.0/
+Selected supplied SVGs were converted to Android vectors and raster fallbacks;
+colors are tinted by the app. Other artwork retains its original license.
+Catalog attribution: https://github.com/iconify/icon-sets/blob/master/json/basil.json
+
+AndroidX / Media3, OkHttp / Okio, Kotlin, Guava / failureaccess,
+JSR-305 and JetBrains annotations — Apache-2.0.
+Copyright their respective authors; upstream notices are retained where packaged.
+https://github.com/androidx/media
+https://android.googlesource.com/platform/frameworks/support/
+https://github.com/square/okhttp
+https://github.com/square/okio
+https://github.com/JetBrains/kotlin
+https://github.com/google/guava
+
+nanojson — Copyright 2011 The nanojson Authors — Apache-2.0.
+https://github.com/TeamNewPipe/nanojson/tree/e9d656ddb49a412a5a0a5d5ef20ca7ef09549996
+
+Rhino 1.8.1 — Mozilla Public License 2.0.
+Source: https://github.com/mozilla/rhino
+The optional desktop JSR-223 engine is excluded. No Rhino source changes are made.
+
+jsoup 1.22.2 — MIT, Copyright Jonathan Hedley.
+https://github.com/jhy/jsoup/tree/jsoup-1.22.2
+
+Protocol Buffers Java Lite 4.35.1 — BSD-3-Clause.
+https://github.com/protocolbuffers/protobuf/tree/v35.1
+
+Core-library desugaring 2.1.5 — OpenJDK-derived GPL-2.0 with the
+Classpath Exception and additional upstream license information.
+https://github.com/google/desugar_jdk_libs
+
+Full license texts are bundled as assets and included in the repository's licenses/
+directory, alongside the runtime dependency inventory. Gradle wrapper: Apache-2.0.
+JUnit/Robolectric are test-only and are not bundled in the application.
