@@ -4,7 +4,7 @@ Current Android alpha priorities, without promised release dates:
 
 - Expand strict permission, lifecycle, network and physical-device checks.
 - Check Chromebook input/window behavior and older Android compatibility.
-- Deliver recurring daily allowances and parent-authorized today-only bonus time.
+- Validate daily schedules/Today overrides on physical devices; refine parent bonus-time grants.
 - Add child profiles and define PIN recovery.
 - Refine discovery, browsing and accessibility from testing feedback.
 - Establish production signing and distribution after alpha validation.

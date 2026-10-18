@@ -26,7 +26,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.Map;
 
-public final class MainActivity extends Activity {
+public final class MainActivity extends androidx.appcompat.app.AppCompatActivity {
     enum Tab { HOME, FAVORITES, SEARCH, CHANNELS, PARENT }
     private ProofState state;
     private LinearLayout cards, content, navigation;
@@ -34,6 +34,7 @@ public final class MainActivity extends Activity {
     private TextView status, measurements;
     private EditText search;
     private AlertDialog parentDialog;
+    private TimerPage timers;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean active, parentUnlocked;
     private Tab tab = Tab.HOME;
@@ -89,6 +90,7 @@ public final class MainActivity extends Activity {
     private void selectTab(Tab next) {
         if (next == tab) return;
         state.invalidateParentActions(); parentUnlocked = false;
+        closeTimers();
         if (parentDialog != null) parentDialog.dismiss();
         tab = next; selectedChannel = null; notice = ""; buildPage();
         if (tab == Tab.PARENT) unlockParents();
@@ -125,15 +127,22 @@ public final class MainActivity extends Activity {
     }
     @Override protected void onResume() {
         super.onResume(); active = true; state.subscribe(changed); render(); clock.run();
+        // Network refresh is opt-in through real channel data, never for an empty setup.
+        state.refreshAllowedIfNeeded();
     }
     @Override protected void onPause() {
         active = false; handler.removeCallbacks(clock); state.updateUsage(false, false);
         state.unsubscribe(changed); state.invalidateParentActions(); parentUnlocked = false;
         if (parentDialog != null) parentDialog.dismiss();
+        closeTimers();
         super.onPause();
     }
     @Override protected void onDestroy() { handler.removeCallbacksAndMessages(null); super.onDestroy(); }
     private boolean navigateBack() {
+        if (timers != null) {
+            if (!timers.back()) closeTimers();
+            render(); return true;
+        }
         if (selectedChannel != null) { selectedChannel = null; buildPage(); return true; }
         if (tab != Tab.HOME) { selectTab(Tab.HOME); return true; }
         return false;
@@ -152,6 +161,12 @@ public final class MainActivity extends Activity {
         String message = state.expired() && tab != Tab.PARENT ? "Viewing time is up. Ask a parent for help." : notice;
         status.setText(message); status.setVisibility(message.isEmpty() ? View.GONE : View.VISIBLE);
         if (tab == Tab.PARENT) { renderParents(); return; }
+        if (state.appExpired()) {
+            cards.addView(Ui.text(this, "App time is up for today", 24, true));
+            cards.addView(Ui.text(this, "Ask a parent to review your limits. Your weekly schedule starts again tomorrow.", 17, false));
+            cards.addView(Ui.button(this, "Ask a parent", this::parents));
+            return;
+        }
         String query = search == null ? "" : search.getText().toString().trim().toLowerCase(Locale.ROOT);
         if (selectedChannel != null && !state.policy.allowsChannel(selectedChannel)) selectedChannel = null;
         if (tab == Tab.CHANNELS && selectedChannel != null) {
@@ -206,7 +221,7 @@ public final class MainActivity extends Activity {
         if (shown == 0 && tab == Tab.CHANNELS) cards.addView(Ui.text(this, "Your subscribed channels will appear here.", 17, false));
     }
     private void loadMore() {
-        if (tab == Tab.PARENT || tab == Tab.FAVORITES || state.loadingMore()
+        if (state.appExpired() || tab == Tab.PARENT || tab == Tab.FAVORITES || state.loadingMore()
                 || tab == Tab.CHANNELS && selectedChannel == null) return;
         state.loadMoreAllowed(selectedChannel, text -> {
             if (!isDestroyed()) { notice = text; render(); }
@@ -265,6 +280,7 @@ public final class MainActivity extends Activity {
         });
     }
     private void renderParents() {
+        if (parentUnlocked && timers != null) { timers.render(cards); return; }
         cards.addView(Ui.text(this, "Parents", 24, true));
         if (!parentUnlocked) {
             cards.addView(Ui.text(this, "Enter your parent PIN to open settings.", 16, false));
@@ -276,6 +292,13 @@ public final class MainActivity extends Activity {
         cards.addView(Ui.button(this, "Refresh / load another page", () -> chooseChannel(false)));
         cards.addView(Ui.button(this, "Remove a channel", () -> chooseChannel(true)));
         cards.addView(Ui.button(this, "Restore blocked content", this::restoreBlocks));
+        cards.addView(Ui.button(this, "Manage timers", () -> {
+            final long epoch = state.parentEpoch();
+            timers = new TimerPage(this, state.timers,
+                    () -> active && tab == Tab.PARENT && parentUnlocked && epoch == state.parentEpoch(),
+                    this::render, () -> { closeTimers(); render(); });
+            render();
+        }));
         cards.addView(Ui.button(this, "Set a short test timer", this::timer));
         cards.addView(Ui.button(this, "Reset proof measurements", state::resetUsage));
         cards.addView(Ui.button(this, (state.forceSplit() ? "Disable" : "Enable") + " separate audio/video test",
@@ -283,8 +306,9 @@ public final class MainActivity extends Activity {
         cards.addView(Ui.button(this, "Device information", this::deviceInfo));
         cards.addView(Ui.button(this, "Open-source notices", this::openNotices));
         measurements = Ui.text(this, state.measurements(), 13, false); cards.addView(measurements);
-        cards.addView(Ui.text(this, "This build uses one local profile and short proof timers. Daily schedules are not configured.", 13, false));
+        cards.addView(Ui.text(this, "One local profile · Daily schedules are managed separately from proof timers.", 13, false));
     }
+    private void closeTimers() { if (timers != null) { timers.close(); timers = null; } }
     private void addChannel() {
         parentDialog = new ChannelSearchDialog(this, state,
                 () -> active && tab == Tab.PARENT && parentUnlocked,

@@ -31,11 +31,17 @@ future production signing/package changes may require reinstalling and setting u
 - Native landscape playback, remaining video time and a subscribed-video rail.
 - Controls that hide while playing and stay visible while paused.
 - Confirmation before blocking, with parent-only restoration.
-- Short cumulative proof timers for testing expiry.
+- Named weekly watching/full-app timers, Today overrides and persistent daily usage.
+- Original-audio default and explicit audio-language selection in the player menu.
+- Bounded memory/disk thumbnail and channel-icon caching.
+- Material 3 Expressive timer controls.
 
-There is currently **one local profile**. Recurring daily allowances, bonus time,
-multiple profiles, PIN recovery and iOS are not implemented. **Time left today:
-No daily limit** is an unconfigured daily readout, separate from proof timers.
+There is currently **one local profile**. Open **Parent → Manage timers** to add
+weekly schedules or change just today's limit. Watching counts actual foreground
+playback; Full app includes browsing. Both can apply together. When schedules of
+the same type overlap, the smallest allowance applies. Today replaces that type's
+weekly limit until local midnight; changing a limit keeps time already used.
+Bonus-time grants, multiple profiles, PIN recovery and iOS are not implemented.
 Source extraction can break when YouTube changes.
 
 ## Build and check

@@ -164,6 +164,9 @@ public final class SourceRepository {
                 entries, Page.isValid(next));
     }
     public ResolvedPlayback resolve(VideoEntry expected, boolean forceSplit) throws Exception {
+        return resolve(expected, forceSplit, null);
+    }
+    public ResolvedPlayback resolve(VideoEntry expected, boolean forceSplit, String requestedAudio) throws Exception {
         StreamInfo info = StreamInfo.getInfo(ServiceList.YouTube,
                 "https://www.youtube.com/watch?v=" + expected.id);
         String owner = ChannelInputs.canonicalChannel(info.getUploaderUrl());
@@ -173,29 +176,61 @@ public final class SourceRepository {
         if (info.getStreamType() != StreamType.VIDEO_STREAM || info.getAgeLimit() > 0)
             throw new IllegalArgumentException("This proof supports ordinary, unrestricted videos only.");
         VideoStream combined = selectVideo(info.getVideoStreams());
-        if (!forceSplit && combined != null)
-            return new ResolvedPlayback(info.getId(), owner, info.getName(), track(combined, info.getDuration()), null);
         VideoStream video = selectVideo(info.getVideoOnlyStreams());
-        AudioStream audio = selectAudio(info.getAudioStreams());
+        AudioStream audio = selectAudio(info.getAudioStreams(), requestedAudio);
+        List<ResolvedPlayback.AudioOption> options = audioOptions(info.getAudioStreams());
+        // Prefer verified original metadata over a combined stream with unspecified audio.
+        if (!forceSplit && requestedAudio == null && combined != null
+                && (audio == null || audio.getAudioTrackType() == null)) {
+            if (audio == null && !options.isEmpty())
+                throw new IllegalArgumentException("Original audio is unavailable. No translated track was substituted.");
+            return new ResolvedPlayback(info.getId(), owner, info.getName(), track(combined, info.getDuration()), null,
+                    options, audio == null ? "" : audioKey(audio));
+        }
         if (video == null || audio == null)
             throw new IllegalArgumentException(forceSplit
                     ? "A separate audio/video pair is unavailable for this video."
                     : "A playable video and audio pair is unavailable.");
         return new ResolvedPlayback(info.getId(), owner, info.getName(),
-                track(video, info.getDuration()), track(audio, info.getDuration()));
+                track(video, info.getDuration()), track(audio, info.getDuration()), options, audioKey(audio));
     }
     static AudioStream selectAudio(List<AudioStream> streams) {
+        return selectAudio(streams, null);
+    }
+    static AudioStream selectAudio(List<AudioStream> streams, String requestedAudio) {
         // Language takes priority over codec/bitrate: a dubbed AAC track must not
         // beat the original audio. Untagged streams support older/single-track
         // uploads; known translations and alternate tracks are never substituted.
         return streams.stream().filter(SourceRepository::usable)
-                .filter(item -> item.getAudioTrackType() == AudioTrackType.ORIGINAL
-                        || item.getAudioTrackType() == null)
+                .filter(item -> requestedAudio != null ? requestedAudio.equals(audioKey(item))
+                        : item.getAudioTrackType() == AudioTrackType.ORIGINAL || item.getAudioTrackType() == null)
                 .max(Comparator.comparingInt((AudioStream item) ->
                         item.getAudioTrackType() == AudioTrackType.ORIGINAL ? 1 : 0)
                         .thenComparingInt(item -> item.getCodec() == null
                                 || !item.getCodec().toLowerCase(Locale.ROOT).contains("opus") ? 1 : 0)
                         .thenComparingInt(AudioStream::getAverageBitrate)).orElse(null);
+    }
+    static String audioKey(AudioStream stream) {
+        if (stream.getAudioTrackId() != null && !stream.getAudioTrackId().isEmpty()) return stream.getAudioTrackId();
+        return (stream.getAudioLocale() == null ? "und" : stream.getAudioLocale().toLanguageTag())
+                + ":" + stream.getAudioTrackType() + ":" + stream.getAudioTrackName();
+    }
+    static List<ResolvedPlayback.AudioOption> audioOptions(List<AudioStream> streams) {
+        Map<String, ResolvedPlayback.AudioOption> result = new LinkedHashMap<>();
+        for (AudioStream stream : streams) {
+            if (!usable(stream)) continue;
+            String name = stream.getAudioTrackName();
+            if (name == null || name.isBlank()) name = stream.getAudioLocale() == null ? "Default audio"
+                    : stream.getAudioLocale().getDisplayName(Locale.getDefault());
+            if (stream.getAudioTrackType() == AudioTrackType.ORIGINAL) name += " · Original";
+            else if (stream.getAudioTrackType() != null) name += " · " + stream.getAudioTrackType().name().toLowerCase(Locale.ROOT);
+            String key = audioKey(stream); result.putIfAbsent(key, new ResolvedPlayback.AudioOption(key, name,
+                    stream.getAudioTrackType() == AudioTrackType.ORIGINAL));
+        }
+        List<ResolvedPlayback.AudioOption> options = new ArrayList<>(result.values());
+        options.sort(Comparator.comparing((ResolvedPlayback.AudioOption option) -> !option.original)
+                .thenComparing(option -> option.label, String.CASE_INSENSITIVE_ORDER));
+        return options;
     }
     private static VideoStream selectVideo(List<VideoStream> streams) {
         return streams.stream().filter(SourceRepository::usable)

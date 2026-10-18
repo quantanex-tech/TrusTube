@@ -14,6 +14,9 @@ Selected supplied SVGs were converted to Android vectors and raster fallbacks;
 colors are tinted by the app. Other artwork retains its original license.
 Catalog attribution: https://github.com/iconify/icon-sets/blob/master/json/basil.json
 
+Material Components for Android 1.14.0 — Apache-2.0, Copyright The Android Open Source Project.
+https://github.com/material-components/material-components-android/tree/1.14.0
+
 AndroidX / Media3, OkHttp / Okio, Kotlin, Guava / failureaccess,
 JSR-305 and JetBrains annotations — Apache-2.0.
 Copyright their respective authors; upstream notices are retained where packaged.

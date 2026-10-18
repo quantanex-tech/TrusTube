@@ -4,7 +4,7 @@ Application source is GPL-3.0-or-later; [LICENSE](LICENSE). Artwork/dependencies
 retain their separate licenses and copyright notices.
 
 - NewPipeExtractor v0.26.5: GPL-3.0-or-later.
-- AndroidX/Media3, OkHttp/Okio, Kotlin, Guava, annotations and nanojson: Apache-2.0.
+- Material Components for Android 1.14.0, AndroidX/Media3, OkHttp/Okio, Kotlin, Guava, annotations and nanojson: Apache-2.0.
 - Rhino 1.8.1: MPL-2.0; desktop JSR-223 engine excluded, source unmodified.
 - jsoup 1.22.2: MIT.
 - Protocol Buffers Java Lite 4.35.1: BSD-3-Clause.

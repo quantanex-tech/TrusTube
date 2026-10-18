@@ -37,6 +37,7 @@ final class PlayerControls extends FrameLayout {
     private final SeekBar timeline;
     private final HorizontalScrollView railScroll;
     private final LinearLayout rail;
+    private boolean menuOpen;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean playing, showing = true, scrubbing;
     private long duration;
@@ -147,10 +148,11 @@ final class PlayerControls extends FrameLayout {
         showing = true; overlay.animate().cancel(); overlay.setVisibility(View.VISIBLE);
         overlay.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_AUTO);
         overlay.animate().alpha(1f).setDuration(150).start();
-        handler.removeCallbacks(autoHide); if (playing && !scrubbing) handler.postDelayed(autoHide, 5000);
+        handler.removeCallbacks(autoHide); if (playing && !scrubbing && !menuOpen) handler.postDelayed(autoHide, 5000);
     }
+    void holdMenu(boolean open) { menuOpen = open; show(); }
     private void hide() {
-        if (!playing || scrubbing) return;
+        if (!playing || scrubbing || menuOpen) return;
         showing = false; overlay.animate().cancel();
         overlay.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO_HIDE_DESCENDANTS);
         overlay.animate().alpha(0f).setDuration(150).withEndAction(() -> {

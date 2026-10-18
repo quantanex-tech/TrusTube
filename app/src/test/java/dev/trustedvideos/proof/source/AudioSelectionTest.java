@@ -37,4 +37,19 @@ public class AudioSelectionTest {
                 audio("descriptive", AudioTrackType.DESCRIPTIVE, false, 128),
                 audio("secondary", AudioTrackType.SECONDARY, false, 128))));
     }
+    @Test public void explicitChoiceCanSelectDubButMissingChoiceNeverFallsBack() throws Exception {
+        AudioStream original = audio("original", AudioTrackType.ORIGINAL, false, 64);
+        AudioStream dub = audio("dub", AudioTrackType.DUBBED, false, 128);
+        assertSame(dub, SourceRepository.selectAudio(List.of(original, dub), SourceRepository.audioKey(dub)));
+        assertNull(SourceRepository.selectAudio(List.of(original, dub), "gone-track"));
+        assertSame(original, SourceRepository.selectAudio(List.of(dub, original), null));
+    }
+    @Test public void codecsForOneLanguageBecomeOneChoiceAndOriginalIsLabelled() throws Exception {
+        AudioStream original = audio("original", AudioTrackType.ORIGINAL, false, 64);
+        AudioStream originalOpus = audio("original-opus", AudioTrackType.ORIGINAL, true, 128);
+        AudioStream dub = audio("dub", AudioTrackType.DUBBED, false, 128);
+        var choices = SourceRepository.audioOptions(List.of(original, originalOpus, dub));
+        assertEquals(2, choices.size()); assertTrue(choices.get(0).label.contains("Original"));
+    }
+
 }

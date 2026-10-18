@@ -26,6 +26,7 @@ import org.json.JSONObject;
 public final class ProofState {
     public final PermissionPolicy policy = new PermissionPolicy();
     public final UsageMeter meter;
+    public final DailyTimers timers;
     public final SourceRepository sources = new SourceRepository();
     public final ExecutorService worker = Executors.newFixedThreadPool(3);
     public final ExecutorService credentials = Executors.newSingleThreadExecutor();
@@ -45,6 +46,7 @@ public final class ProofState {
         policy.restore(prefs.getStringSet("channels", Set.of()), prefs.getStringSet("blockedVideos", Set.of()),
                 prefs.getStringSet("blockedChannels", Set.of()));
         meter = new UsageMeter(prefs.getLong("foregroundMs", 0), prefs.getLong("playingMs", 0));
+        timers = new DailyTimers(prefs, this::changed);
         try {
             JSONObject names = new JSONObject(prefs.getString("channelNames", "{}"));
             names.keys().forEachRemaining(id -> channelNames.put(id, names.optString(id)));
@@ -103,10 +105,41 @@ public final class ProofState {
     private synchronized void storeBatch(SourceRepository.ChannelBatch batch) {
         channelNames.put(batch.id, batch.name);
         channelAvatars.put(batch.id, batch.avatar);
-        for (VideoEntry entry : batch.videos) catalog.put(entry.id, entry);
+        for (VideoEntry entry : batch.videos) {
+            VideoEntry previous = catalog.get(entry.id);
+            if (entry.uploadedAtMs <= 0 && previous != null && previous.uploadedAtMs > 0)
+                entry = new VideoEntry(entry.id, entry.channelId, entry.channelName, entry.title,
+                        entry.thumbnail, entry.durationSeconds, previous.uploadedAtMs);
+            catalog.put(entry.id, entry);
+        }
         saveCatalog(); changed();
     }
     public boolean loadingMore() { return loadingMore; }
+    /** Refresh every subscription on upgrade/after six hours so old undated caches can interleave. */
+    public void refreshAllowedIfNeeded() {
+        if (loadingMore || appExpired() || System.currentTimeMillis() - prefs.getLong("datedCatalogRefresh", 0) < 6 * 3600000L) return;
+        List<String> ids = new ArrayList<>(policy.channels()); ids.removeIf(id -> !policy.allowsChannel(id));
+        if (ids.isEmpty()) return;
+        loadingMore = true; final long revision = policy.revision();
+        worker.execute(() -> {
+            List<SourceRepository.ChannelBatch> batches = new ArrayList<>(); boolean failed = false;
+            for (String id : ids) {
+                if (policy.revision() != revision) break;
+                try {
+                    SourceRepository.ChannelBatch first = sources.loadChannel(id); batches.add(first);
+                    if (first.hasMore) batches.add(sources.loadMore(id));
+                } catch (Exception error) { failed = true; }
+            }
+            final boolean complete = !failed;
+            main.post(() -> {
+                loadingMore = false;
+                for (SourceRepository.ChannelBatch batch : batches) acceptAllowedBatch(batch, revision);
+                if (complete && policy.revision() == revision)
+                    prefs.edit().putLong("datedCatalogRefresh", System.currentTimeMillis()).apply();
+                changed();
+            });
+        });
+    }
     public boolean canLoadMore(String onlyChannel) {
         for (String id : policy.channels())
             if (policy.allowsChannel(id) && (onlyChannel == null || onlyChannel.equals(id)) && sources.hasMore(id)) return true;
@@ -170,10 +203,13 @@ public final class ProofState {
     private void changed() { main.post(() -> listeners.forEach(Runnable::run)); }
     public synchronized void updateUsage(boolean foreground, boolean playing) {
         meter.update(SystemClock.elapsedRealtime(), foreground, playing);
+        timers.tick(foreground, playing);
         prefs.edit().putLong("foregroundMs", meter.foregroundMs()).putLong("playingMs", meter.playingMs()).apply();
         if (expired() && !expiredNotified) { expiredNotified = true; changed(); }
     }
-    public boolean expired() { return meter.expired(prefs.getBoolean("watchMode", true), prefs.getLong("limitMs", 0)); }
+    public boolean expired() { return appExpired() || timers.expired(dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING)
+            || meter.expired(prefs.getBoolean("watchMode", true), prefs.getLong("limitMs", 0)); }
+    public boolean appExpired() { return timers.expired(dev.trustedvideos.proof.core.TimerSchedule.Type.APP); }
     public boolean forceSplit() { return prefs.getBoolean("forceSplit", false); }
     public long testRemainingMs() {
         long limit = prefs.getLong("limitMs", 0);
