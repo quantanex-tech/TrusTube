@@ -26,8 +26,37 @@ Useful checks:
 - Try network loss, retry and short proof timers. Disable an expired test timer
   in Parent before ordinary viewing.
 
-This build uses one profile and cumulative test timers. Daily schedules, bonus time,
-multiple profiles and PIN recovery are absent; the daily readout is unconfigured.
+Use **Parent → Manage timers** for daily limits:
+
+- Add a named Watching timer. Use Weekdays or Weekend, tap a day, adjust in
+  15-minute steps or tap the duration for exact minutes, then Save timer.
+- Add a Full app timer. Pause/buffering should stop Watching usage while Full app
+  continues in the foreground. Backgrounding stops both; returning never autoplays.
+- Check overlapping schedules: the smallest matching allowance per type applies.
+  Both types run together. Zero minutes blocks that activity; a disabled day is unlimited.
+- In Today choose Watching or Full app and change its limit. This replaces the
+  weekly limit for that type only. Daily limit off grants unlimited time today;
+  Use weekly schedule removes the override. At local midnight the weekly schedule
+  resumes, or no limit if none exists.
+- Edit, disable and delete timers; spent time must remain spent. Restart the app
+  and check usage/settings survive. Reset proof measurements must not reset daily usage.
+- Watching expiry prevents playback while browsing remains available. Full app
+  expiry locks child browsing. Parent PIN access stays available for changing limits.
+- Leave/background Parent with a timer editor open; the editor must close and its
+  old Done action must not save changes. Settings must require the PIN again.
+- Check the player menu's two Time left today readouts. Select Audio language on
+  a multilingual upload; original should be the default. Switching should preserve
+  position and play/pause state. Reopening a video starts with original audio again.
+- Navigate repeatedly between Home/Channels/player and restart offline: cached
+  thumbnails/icons should remain available until evicted or stale (14 days).
+
+One local profile remains. Bonus-time grants, multiple profiles and PIN recovery
+are absent. Daily resets follow the device's local date/timezone; clock changes,
+app-data clearing and reinstalling are not tamper protected. Short proof timers
+remain separate diagnostics; disable them after testing.
+
+Version 0.4 requires physical checks for daily expiry/rollover and decoded audio
+switching. Host tests and native fixture renders do not establish device acceptance.
 
 Earlier interface smoke checks passed on a Nothing Phone 2, Android 16/API 36.
 Original playback was also tried on a Galaxy A12, Android 12/API 31. The wider

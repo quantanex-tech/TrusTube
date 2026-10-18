@@ -32,7 +32,7 @@ import java.nio.charset.StandardCharsets;
 import java.util.concurrent.Future;
 
 @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
-public final class PlayerActivity extends Activity {
+public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivity {
     private ProofState state;
     private PlaybackGate gate;
     private ExoPlayer player;
@@ -46,6 +46,11 @@ public final class PlayerActivity extends Activity {
     private boolean active, loading;
     private long request;
     private String kind = "";
+    private String requestedAudio, selectedAudio = "";
+    private java.util.List<ResolvedPlayback.AudioOption> audioOptions = java.util.List.of();
+    private long resumeAt;
+    private boolean resumePlaying = true;
+    private android.app.AlertDialog audioDialog;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable changed = this::permissionsChanged;
     private final Runnable clock = new Runnable() {
@@ -80,6 +85,7 @@ public final class PlayerActivity extends Activity {
                 if (playbackState == Player.STATE_ENDED) { controls.setPlaying(false); controls.show(); updateControls(); }
             }
             @Override public void onPlayerError(PlaybackException error) {
+                resumeAt = player.getCurrentPosition(); resumePlaying = player.getPlayWhenReady();
                 deny("This stream could not play (" + error.getErrorCodeName() + "). Retry resolves the same approved video again.");
             }
         });
@@ -108,7 +114,7 @@ public final class PlayerActivity extends Activity {
         messagePanel.setPadding(Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18), Ui.dp(this, 18));
         messagePanel.setBackground(Ui.background(0xF0FFFFFF, 18, this));
         message = Ui.text(this, "", 17, true); messagePanel.addView(message);
-        messagePanel.addView(Ui.button(this, "Retry this video", () -> { if (selected != null) play(selected); }));
+        messagePanel.addView(Ui.button(this, "Retry this video", this::retry));
         messagePanel.addView(Ui.button(this, "Back to approved videos", this::finish));
         FrameLayout.LayoutParams panel = new FrameLayout.LayoutParams(Ui.dp(this, 330), -2, Gravity.CENTER);
         root.addView(messagePanel, panel);
@@ -117,13 +123,17 @@ public final class PlayerActivity extends Activity {
         updateControls(); refreshRail();
     }
     @Override protected void onResume() {
-        super.onResume(); active = true; state.subscribe(changed); controls.show();
+        super.onResume(); active = true; state.subscribe(changed); controls.holdMenu(false);
         permissionsChanged(); if (isFinishing()) return; clock.run();
-        if (player.getMediaItemCount() == 0 && selected != null && !state.expired()) play(selected);
+        if (player.getMediaItemCount() == 0 && selected != null && !state.expired()) retry();
     }
     @Override protected void onPause() {
-        active = false; handler.removeCallbacks(clock); controls.stop();
+        active = false; handler.removeCallbacks(clock);
+        if (player.getMediaItemCount() > 0) resumeAt = player.getCurrentPosition();
+        resumePlaying = false;
         state.updateUsage(false, false); player.pause();
+        if (audioDialog != null) audioDialog.dismiss();
+        controls.stop();
         gate.cancel(); request++;
         if (pending != null) pending.cancel(true);
         if (loading) { loading = false; message.setText("Loading paused. Retry when you return."); }
@@ -151,19 +161,28 @@ public final class PlayerActivity extends Activity {
     }
     private void showMenu(View anchor) {
         if (selected == null) return;
+        controls.holdMenu(true);
         PopupMenu menu = new PopupMenu(this, anchor);
-        menu.getMenu().add("Time left today: No daily limit").setEnabled(false);
+        menu.getMenu().add("Time left today · Watching: " + state.timers.remainingLabel(
+                dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING)).setEnabled(false);
+        menu.getMenu().add("Time left today · Full app: " + state.timers.remainingLabel(
+                dev.trustedvideos.proof.core.TimerSchedule.Type.APP)).setEnabled(false);
+        menu.getMenu().add("Audio language").setOnMenuItemClickListener(item -> { chooseAudio(); return true; });
         if (state.testRemainingMs() >= 0)
             menu.getMenu().add("Proof timer left: " + Ui.duration(state.testRemainingMs())).setEnabled(false);
         menu.getMenu().add(state.isFavorite(selected.id) ? "Remove favorite" : "Add favorite")
                 .setOnMenuItemClickListener(item -> { state.toggleFavorite(selected.id); return true; });
         menu.getMenu().add("Block this video").setOnMenuItemClickListener(item -> {
-            Ui.confirmBlock(this, state, selected, false, this::stopAndFinish); return true;
+            showBlock(false); return true;
         });
         menu.getMenu().add("Block this channel").setOnMenuItemClickListener(item -> {
-            Ui.confirmBlock(this, state, selected, true, this::stopAndFinish); return true;
+            showBlock(true); return true;
         });
-        menu.setOnDismissListener(ignored -> controls.show()); menu.show();
+        menu.setOnDismissListener(ignored -> controls.holdMenu(audioDialog != null && audioDialog.isShowing())); menu.show();
+    }
+    private void showBlock(boolean channel) {
+        audioDialog = Ui.confirmBlock(this, state, selected, channel, this::stopAndFinish);
+        audioDialog.setOnDismissListener(dialog -> controls.holdMenu(false));
     }
     private void stopAndFinish() {
         active = false; gate.cancel(); request++; if (pending != null) pending.cancel(true);
@@ -187,7 +206,32 @@ public final class PlayerActivity extends Activity {
         controls.show(); return super.onKeyDown(key, event);
     }
     private void play(VideoEntry entry) {
+        startPlayback(entry, null, 0, true);
+    }
+    private void retry() { if (selected != null) startPlayback(selected, requestedAudio, resumeAt, resumePlaying); }
+    private void chooseAudio() {
+        if (!active || selected == null) return;
+        if (audioOptions.isEmpty()) {
+            audioDialog = new android.app.AlertDialog.Builder(this).setTitle("Audio language")
+                    .setMessage("This video has one default audio track. Language information is unavailable.")
+                    .setPositiveButton("OK", null).show();
+            audioDialog.setOnDismissListener(dialog -> controls.holdMenu(false)); return;
+        }
+        String[] labels = audioOptions.stream().map(option -> option.label).toArray(String[]::new);
+        int checked = -1;
+        for (int i = 0; i < audioOptions.size(); i++) if (audioOptions.get(i).id.equals(selectedAudio)) checked = i;
+        audioDialog = new android.app.AlertDialog.Builder(this).setTitle("Audio language")
+                .setSingleChoiceItems(labels, checked, (dialog, which) -> {
+                    if (active && selected != null && !state.expired())
+                        startPlayback(selected, audioOptions.get(which).id, player.getCurrentPosition(), player.getPlayWhenReady());
+                    dialog.dismiss();
+                }).setNegativeButton("Cancel", null).create();
+        audioDialog.setOnDismissListener(dialog -> controls.holdMenu(false)); audioDialog.show();
+    }
+    private void startPlayback(VideoEntry entry, String audioId, long position, boolean shouldPlay) {
         if (!active || !state.pinSet()) return;
+        requestedAudio = audioId; resumeAt = position; resumePlaying = shouldPlay;
+        audioOptions = java.util.List.of(); selectedAudio = "";
         state.updateUsage(true, player.isPlaying()); player.stop(); player.clearMediaItems();
         if (pending != null) pending.cancel(true);
         final PlaybackGate.Ticket ticket;
@@ -197,7 +241,7 @@ public final class PlayerActivity extends Activity {
         message.setText("Loading " + entry.title + "…"); messagePanel.setVisibility(View.VISIBLE);
         pending = state.worker.submit(() -> {
             try {
-                ResolvedPlayback resolved = state.sources.resolve(entry, state.forceSplit());
+                ResolvedPlayback resolved = state.sources.resolve(entry, state.forceSplit(), audioId);
                 runOnUiThread(() -> {
                     if (!active || serial != request || isDestroyed()) return;
                     state.updateUsage(true, false);
@@ -208,9 +252,10 @@ public final class PlayerActivity extends Activity {
                         MediaSource video = mediaSource(resolved.video);
                         MediaSource source = resolved.audio == null ? video
                                 : new MergingMediaSource(true, true, video, mediaSource(resolved.audio));
-                        player.setMediaSource(source); player.prepare(); player.play();
+                        player.setMediaSource(source, Math.max(0, position)); player.prepare(); player.setPlayWhenReady(shouldPlay);
+                        audioOptions = resolved.audioOptions; selectedAudio = resolved.selectedAudio;
                         kind = resolved.kind; loading = false; messagePanel.setVisibility(View.GONE);
-                        controls.setPlaying(true); controls.show();
+                        controls.setPlaying(shouldPlay); controls.show();
                     } catch (Exception error) { deny("This approved source could not be prepared. Try again."); }
                 });
             } catch (Exception error) {

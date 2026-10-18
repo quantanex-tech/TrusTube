@@ -40,6 +40,7 @@ public class MainActivityTest {
     private ProofState fixture() {
         ProofApplication app = (ProofApplication) RuntimeEnvironment.getApplication();
         app.getSharedPreferences("proof", Context.MODE_PRIVATE).edit().clear()
+                .putLong("datedCatalogRefresh", System.currentTimeMillis())
                 .putStringSet("channels", Set.of(CHANNEL))
                 .putString("channelNames", "{\"" + CHANNEL + "\":\"Test channel\"}")
                 .putString("catalog", "[{\"id\":\"abcdefghijk\",\"channel\":\"" + CHANNEL
@@ -239,6 +240,138 @@ public class MainActivityTest {
             try (FileOutputStream stream = new FileOutputStream(output)) { bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream); }
         }
         state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+
+
+    @Test public void playerControlsStayVisibleDuringMenusAndResumeTheirHideDelay() {
+        ProofState state = fixture();
+        try (ActivityController<Activity> controller = Robolectric.buildActivity(Activity.class).setup()) {
+            PlayerControls controls = new PlayerControls(controller.get(), state, new PlayerControls.Actions() {
+                public void back() {} public void togglePlay() {} public void favorite() {} public void menu(View anchor) {}
+                public void seek(long position) {} public void play(VideoEntry video) {} public void more() {}
+            });
+            controller.get().setContentView(controls); controller.visible();
+            controller.windowFocusChanged(true);
+            android.widget.FrameLayout overlay = ReflectionHelpers.getField(controls, "overlay");
+            overlay.setDescendantFocusability(ViewGroup.FOCUS_BLOCK_DESCENDANTS); overlay.clearFocus();
+            controls.setPlaying(true); controls.holdMenu(true);
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(8));
+            assertTrue(ReflectionHelpers.getField(controls, "showing"));
+            controls.holdMenu(false);
+            Shadows.shadowOf(Looper.getMainLooper()).idleFor(java.time.Duration.ofSeconds(6));
+            assertFalse(ReflectionHelpers.getField(controls, "showing"));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void expiredFullAppLocksBrowsingButParentCanStillManageTimers() throws Exception {
+        ProofState state = fixture();
+        state.timers.today(dev.trustedvideos.proof.core.TimerSchedule.Type.APP, 0);
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            View root = controller.get().getWindow().getDecorView();
+            assertNotNull(findText(root, "App time is up for today"));
+            assertNull(findText(root, "Build a tiny rocket"));
+            unlockParent(root, state);
+            findText(root, "Manage timers").performClick();
+            assertNotNull(findText(root, "Daily time limits"));
+            root.findViewWithTag(MainActivity.Tab.HOME).performClick();
+            assertNotNull(findText(root, "App time is up for today"));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void watchExpiryAllowsBrowsingAndProofResetCannotResetDailyUsage() {
+        ProofState state = fixture(); state.timers.today(dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING, 0);
+        state.resetUsage(); assertTrue(state.expired()); assertFalse(state.appExpired());
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            assertNotNull(findText(root, "Build a tiny rocket"));
+            findDescription(root, "Build a tiny rocket · Test channel").performClick();
+            assertNull(Shadows.shadowOf(activity).getNextStartedActivity());
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test @Config(sdk = 28, qualifiers = "w400dp-h850dp-xxhdpi") @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    public void timerCrudTodayEditorAndBackgroundRelocking() throws Exception {
+        ProofState state = fixture();
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            unlockParent(root, state); findText(root, "Manage timers").performClick();
+            findText(root, "+ Add timer").performClick(); findEdit(root).setText("School days");
+            findText(root, "Weekdays").performClick();
+            savePreview(root, "timer-weekly-preview.png", 1200, 2550);
+            findText(root, "Save timer").performClick();
+            assertEquals(1, state.timers.schedules().size());
+            assertEquals("School days", state.timers.schedules().get(0).name);
+            assertEquals(-1, state.timers.schedules().get(0).minutes(6));
+            savePreview(root, "timer-management-preview.png", 1200, 2550);
+            findText(root, "Today  ›").performClick(); findText(root, "Change today's limit").performClick();
+            TimerPage page = ReflectionHelpers.getField(activity, "timers");
+            com.google.android.material.bottomsheet.BottomSheetDialog sheet = ReflectionHelpers.getField(page, "sheet");
+            View done = findText(sheet.getWindow().getDecorView(), "Done"); assertNotNull(done);
+            savePreview(sheet.getWindow().getDecorView(), "timer-today-preview.png", 1200, 2550);
+            long epoch = state.parentEpoch(); controller.pause();
+            assertTrue(state.parentEpoch() > epoch); assertFalse(sheet.isShowing()); done.performClick();
+            assertFalse(state.timers.hasToday(dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING));
+            controller.resume(); assertNull(findText(root, "Manage timers"));
+            assertNotNull(findText(root, "Unlock parent settings"));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+
+    @Test public void durationSheetAppliesAllDaysAndTodaySelectorTargetsOnlyChosenType() throws Exception {
+        ProofState state = fixture();
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            unlockParent(root, state); findText(root, "Manage timers").performClick();
+            findText(root, "+ Add timer").performClick(); findEdit(root).setText("Daily watching");
+            findText(root, "1 h  ›").performClick();
+            TimerPage page = ReflectionHelpers.getField(activity, "timers");
+            com.google.android.material.bottomsheet.BottomSheetDialog sheet = ReflectionHelpers.getField(page, "sheet");
+            View editor = sheet.getWindow().getDecorView();
+            findText(editor, "−").performClick(); findText(editor, "−").performClick();
+            findText(editor, "Apply to all days of the week").performClick(); findText(editor, "Done").performClick();
+            findText(root, "Save timer").performClick();
+            assertArrayEquals(new int[]{30,30,30,30,30,30,30}, state.timers.schedules().get(0).days());
+            findText(root, "Today  ›").performClick(); findText(root, "Change today's limit").performClick();
+            sheet = ReflectionHelpers.getField(page, "sheet"); editor = sheet.getWindow().getDecorView();
+            findSpinner(editor).setSelection(1); Shadows.shadowOf(Looper.getMainLooper()).idle();
+            findText(editor, "Daily limit").performClick();
+            for (int i=0;i<4;i++) findText(editor, "−").performClick();
+            findText(editor, "Done").performClick();
+            assertEquals(0, state.timers.allowance(dev.trustedvideos.proof.core.TimerSchedule.Type.APP));
+            assertEquals(30, state.timers.allowance(dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING));
+            assertTrue(state.appExpired());
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    private static android.widget.Spinner findSpinner(View root) {
+        if (root instanceof android.widget.Spinner spinner) return spinner;
+        if (root instanceof ViewGroup group) for (int i=0;i<group.getChildCount();i++) {
+            android.widget.Spinner found = findSpinner(group.getChildAt(i)); if (found != null) return found;
+        }
+        return null;
+    }
+    @Test public void refreshWithMissingDatePreservesExistingUploadOrdering() {
+        ProofState state = fixture();
+        state.add(new SourceRepository.ChannelBatch(CHANNEL, "Test", "", List.of(
+                new VideoEntry("abcdefghijk", CHANNEL, "Test", "Dated", "", 60, 123456)), false));
+        state.add(new SourceRepository.ChannelBatch(CHANNEL, "Test", "", List.of(
+                new VideoEntry("abcdefghijk", CHANNEL, "Test", "Refreshed", "", 60, 0)), false));
+        assertEquals(123456, state.allowedEntries().get(0).uploadedAtMs);
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    private static void unlockParent(View root, ProofState state) throws Exception {
+        root.findViewWithTag(MainActivity.Tab.PARENT).performClick();
+        AlertDialog pin = ShadowAlertDialog.getLatestAlertDialog();
+        Shadows.shadowOf(Looper.getMainLooper()).idle(); findEdit(pin.getWindow().getDecorView()).setText("582901");
+        pin.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+        state.credentials.submit(() -> {}).get(5, TimeUnit.SECONDS); Shadows.shadowOf(Looper.getMainLooper()).idle();
+    }
+    private static void savePreview(View root, String name, int width, int height) throws Exception {
+        root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY), View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+        root.layout(0, 0, width, height);
+        Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888); root.draw(new Canvas(bitmap));
+        File output = new File("../out/"+name); output.getParentFile().mkdirs();
+        try (FileOutputStream stream = new FileOutputStream(output)) { bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream); }
     }
     private static View findDescription(View root, String description) {
         if (description.contentEquals(root.getContentDescription() == null ? "" : root.getContentDescription())) return root;

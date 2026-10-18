@@ -7,8 +7,8 @@ android {
         applicationId 'dev.trustedvideos.proof'
         minSdk 23
         targetSdk 36
-        versionCode 3
-        versionName '0.3.0-alpha.1'
+        versionCode 4
+        versionName '0.4.0-alpha.1'
         testInstrumentationRunner 'androidx.test.runner.AndroidJUnitRunner'
     }
     buildTypes {
@@ -39,6 +39,7 @@ android {
 dependencyLocking { lockAllConfigurations() }
 
 dependencies {
+    implementation 'com.google.android.material:material:1.14.0'
     implementation('com.github.teamnewpipe:NewPipeExtractor:v0.26.5') {
         // The extractor uses Rhino Context in interpreted mode, not the desktop JSR-223 engine.
         exclude group: 'org.mozilla', module: 'rhino-engine'
@@ -59,7 +60,8 @@ tasks.register('extractionProbe', JavaExec) {
             configurations.debugRuntimeClasspath.filter { it.name.endsWith('.jar') }
     mainClass = 'dev.trustedvideos.proof.source.ExtractionProbe'
     args = [providers.gradleProperty('probeChannel').getOrElse('@CrunchLabs'),
-            providers.gradleProperty('probeVideo').getOrElse('')]
+            providers.gradleProperty('probeVideo').getOrElse(''),
+            providers.gradleProperty('probeMetadataOnly').getOrElse('false')]
 }
 
 tasks.register('channelSearchProbe', JavaExec) {

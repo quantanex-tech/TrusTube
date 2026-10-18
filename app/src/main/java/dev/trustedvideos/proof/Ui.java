@@ -5,15 +5,12 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Context;
 import android.content.res.ColorStateList;
-import android.graphics.Bitmap;
-import android.graphics.BitmapFactory;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.GradientDrawable;
 import android.text.InputType;
 import android.text.TextUtils;
 import android.view.Gravity;
-import android.util.LruCache;
 import android.view.View;
 import android.widget.Button;
 import android.widget.EditText;
@@ -24,20 +21,10 @@ import android.widget.LinearLayout;
 import android.widget.PopupMenu;
 import android.widget.TextView;
 import dev.trustedvideos.proof.core.VideoEntry;
-import java.net.URI;
-import okhttp3.OkHttpClient;
-import okhttp3.Request;
-import okhttp3.Response;
 
 final class Ui {
     static final int INK = Color.BLACK, PURPLE = Color.rgb(126, 10, 229), SKY = Color.rgb(239, 250, 255);
-    private static final LruCache<String, Bitmap> images = new LruCache<>(8 * 1024 * 1024) {
-        @Override protected int sizeOf(String key, Bitmap value) { return value.getByteCount(); }
-    };
-    private static final OkHttpClient imageClient = new OkHttpClient.Builder()
-            .callTimeout(15, java.util.concurrent.TimeUnit.SECONDS).build();
-    private static final java.util.concurrent.ExecutorService imageWorker =
-            java.util.concurrent.Executors.newFixedThreadPool(3);
+    private static ImageCache images;
     static int dp(Context context, int value) { return Math.round(value * context.getResources().getDisplayMetrics().density); }
     static GradientDrawable background(int color, int radius, Context context) {
         GradientDrawable shape = new GradientDrawable(); shape.setColor(color); shape.setCornerRadius(dp(context, radius));
@@ -49,7 +36,7 @@ final class Ui {
         return view;
     }
     static Button button(Context context, String label, Runnable action) {
-        Button button = new Button(context); button.setText(label); button.setAllCaps(false);
+        Button button = new com.google.android.material.button.MaterialButton(context); button.setText(label); button.setAllCaps(false);
         button.setOnClickListener(view -> action.run()); return button;
     }
     static ImageButton icon(Context context, int resource, String label, int color, Runnable action) {
@@ -118,8 +105,8 @@ final class Ui {
         menu.show();
         return menu;
     }
-    static void confirmBlock(Activity activity, ProofState state, VideoEntry entry, boolean channel, Runnable blocked) {
-        new AlertDialog.Builder(activity).setTitle(channel ? "Block this channel?" : "Block this video?")
+    static AlertDialog confirmBlock(Activity activity, ProofState state, VideoEntry entry, boolean channel, Runnable blocked) {
+        return new AlertDialog.Builder(activity).setTitle(channel ? "Block this channel?" : "Block this video?")
                 .setMessage((channel ? entry.channelName : entry.title) + " will be hidden. Only a parent can restore it.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Block", (dialog, which) -> {
                     if (channel) state.blockChannel(entry.channelId); else state.blockVideo(entry.id);
@@ -131,7 +118,7 @@ final class Ui {
         card.setPadding(dp(activity, compact ? 0 : 8), dp(activity, compact ? 0 : 8), dp(activity, compact ? 0 : 8), dp(activity, compact ? 0 : 5));
         card.setBackground(background(compact ? Color.TRANSPARENT : Color.WHITE, 12, activity));
         FrameLayout imageFrame = new FrameLayout(activity);
-        ImageView thumbnail = new ImageView(activity) {
+        ImageView thumbnail = new androidx.appcompat.widget.AppCompatImageView(activity) {
             private final android.graphics.Path clip = new android.graphics.Path();
             @Override protected void onSizeChanged(int width, int height, int oldWidth, int oldHeight) {
                 super.onSizeChanged(width, height, oldWidth, oldHeight);
@@ -168,26 +155,13 @@ final class Ui {
     }
     static void image(Activity activity, ProofState state, ImageView view, String url) {
         view.setTag(url);
-        if (url == null || url.isEmpty()) return;
-        try {
-            URI uri = URI.create(url); String host = uri.getHost();
-            if (!"https".equals(uri.getScheme()) || host == null || !(host.endsWith(".ytimg.com")
-                    || host.endsWith(".ggpht.com") || host.endsWith(".googleusercontent.com"))) return;
-        } catch (RuntimeException e) { return; }
-        Bitmap cached = images.get(url);
-        if (cached != null) { view.setImageBitmap(cached); return; }
-        imageWorker.execute(() -> {
-            if (activity.isDestroyed()) return;
-            try (Response response = imageClient.newCall(new Request.Builder().url(url).build()).execute()) {
-                if (!response.isSuccessful() || response.body() == null) return;
-                BitmapFactory.Options options = new BitmapFactory.Options();
-                options.inSampleSize = 2;
-                Bitmap bitmap = BitmapFactory.decodeStream(response.body().byteStream(), null, options);
-                if (bitmap == null) return; images.put(url, bitmap);
-                activity.runOnUiThread(() -> {
-                    if (!activity.isDestroyed() && url.equals(view.getTag())) view.setImageBitmap(bitmap);
-                });
-            } catch (Exception ignored) {}
+        if (images == null) images = new ImageCache(activity.getApplicationContext());
+        java.lang.ref.WeakReference<Activity> owner = new java.lang.ref.WeakReference<>(activity);
+        java.lang.ref.WeakReference<ImageView> target = new java.lang.ref.WeakReference<>(view);
+        images.load(url, bitmap -> {
+            Activity current = owner.get(); ImageView image = target.get();
+            if (current != null && image != null && !current.isDestroyed() && url.equals(image.getTag()))
+                image.setImageBitmap(bitmap);
         });
     }
 }
