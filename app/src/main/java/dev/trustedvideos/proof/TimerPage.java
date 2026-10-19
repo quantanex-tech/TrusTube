@@ -180,7 +180,7 @@ final class TimerPage {
         }));
         body.addView(limit, new LinearLayout.LayoutParams(-1, Ui.dp(activity, 64)));
         LinearLayout stepper = new LinearLayout(activity); stepper.setGravity(Gravity.CENTER_VERTICAL);
-        stepper.addView(button("−", () -> { if (limit.isChecked()) { minutes[0] = Math.max(0, minutes[0] - 15); refresh.run(); } }),
+        stepper.addView(button("−", () -> { if (limit.isChecked()) { minutes[0] = Math.max(0, minutes[0] - 5); refresh.run(); } }),
                 new LinearLayout.LayoutParams(Ui.dp(activity, 64), Ui.dp(activity, 64)));
         readout.setContentDescription("Set exact duration in minutes"); readout.setFocusable(true); readout.setClickable(true);
         readout.setOnClickListener(view -> {
@@ -198,7 +198,7 @@ final class TimerPage {
             })); exactDialog.show();
         });
         stepper.addView(readout, new LinearLayout.LayoutParams(0, Ui.dp(activity, 72), 1));
-        stepper.addView(button("+", () -> { if (limit.isChecked()) { minutes[0] = Math.min(1440, minutes[0] + 15); refresh.run(); } }),
+        stepper.addView(button("+", () -> { if (limit.isChecked()) { minutes[0] = Math.min(1440, minutes[0] + 5); refresh.run(); } }),
                 new LinearLayout.LayoutParams(Ui.dp(activity, 64), Ui.dp(activity, 64))); body.addView(stepper);
         limit.setOnCheckedChangeListener((view, checked) -> refresh.run()); refresh.run();
         body.addView(Ui.text(activity, "Tap the time for an exact value. Zero minutes means no time today.", 13, false));
