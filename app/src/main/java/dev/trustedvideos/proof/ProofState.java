@@ -7,6 +7,7 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import dev.trustedvideos.proof.core.PermissionPolicy;
+import dev.trustedvideos.proof.core.ChannelTransfer;
 import dev.trustedvideos.proof.core.PinHash;
 import dev.trustedvideos.proof.core.UsageMeter;
 import dev.trustedvideos.proof.core.VideoEntry;
@@ -27,6 +28,7 @@ public final class ProofState {
     public final PermissionPolicy policy = new PermissionPolicy();
     public final UsageMeter meter;
     public final DailyTimers timers;
+    final WatchProgress progress;
     public final SourceRepository sources = new SourceRepository();
     public final ExecutorService worker = Executors.newFixedThreadPool(3);
     public final ExecutorService credentials = Executors.newSingleThreadExecutor();
@@ -40,9 +42,17 @@ public final class ProofState {
     private boolean expiredNotified;
     private volatile long parentEpoch;
     private volatile boolean loadingMore;
+    interface ChannelLoader {
+        SourceRepository.ChannelBatch load(String id, boolean more) throws Exception;
+    }
+    private final ChannelLoader channelLoader;
 
-    ProofState(Context context) {
+    ProofState(Context context) { this(context, null); }
+    ProofState(Context context, ChannelLoader loader) {
+        channelLoader = loader != null ? loader
+                : (id, more) -> more ? sources.loadMore(id) : sources.loadChannel(id);
         prefs = context.getSharedPreferences("proof", Context.MODE_PRIVATE);
+        progress = new WatchProgress(context.getSharedPreferences("watch-progress", Context.MODE_PRIVATE));
         policy.restore(prefs.getStringSet("channels", Set.of()), prefs.getStringSet("blockedVideos", Set.of()),
                 prefs.getStringSet("blockedChannels", Set.of()));
         meter = new UsageMeter(prefs.getLong("foregroundMs", 0), prefs.getLong("playingMs", 0));
@@ -65,6 +75,13 @@ public final class ProofState {
         } catch (Exception ignored) { catalog.clear(); }
     }
     public synchronized VideoEntry find(String id) { return catalog.get(id); }
+    WatchProgress.Entry progress(VideoEntry entry) {
+        return entry != null && policy.allows(entry.id, entry.channelId) ? progress.get(entry.id) : null;
+    }
+    long resumePosition(VideoEntry entry) {
+        WatchProgress.Entry saved = progress(entry);
+        return saved == null ? 0 : saved.positionMs;
+    }
     public synchronized List<VideoEntry> allowedEntries() {
         List<VideoEntry> result = new ArrayList<>();
         for (VideoEntry entry : catalog.values())
@@ -92,6 +109,17 @@ public final class ProofState {
     }
     public synchronized Map<String, String> channels() { return new LinkedHashMap<>(channelNames); }
     public synchronized String avatar(String id) { return channelAvatars.getOrDefault(id, ""); }
+    public synchronized String exportChannels() {
+        List<ChannelTransfer.Channel> rows = new ArrayList<>();
+        for (String id : policy.channels()) rows.add(new ChannelTransfer.Channel(id, label(id), policy.blockedChannels().contains(id)));
+        return ChannelTransfer.encode(rows);
+    }
+    public synchronized int importChannels(List<ChannelTransfer.Channel> rows) {
+        int added = ChannelTransfer.merge(policy, rows);
+        for (ChannelTransfer.Channel row : rows) channelNames.putIfAbsent(row.id, row.name.isBlank() ? row.id : row.name);
+        prefs.edit().remove("datedCatalogRefresh").apply();
+        saveCatalog(); changed(); return added;
+    }
     public long parentEpoch() { return parentEpoch; }
     public void invalidateParentActions() { parentEpoch++; }
     public synchronized String label(String id) {
@@ -121,19 +149,19 @@ public final class ProofState {
         List<String> ids = new ArrayList<>(policy.channels()); ids.removeIf(id -> !policy.allowsChannel(id));
         if (ids.isEmpty()) return;
         loadingMore = true; final long revision = policy.revision();
+        changed();
         worker.execute(() -> {
-            List<SourceRepository.ChannelBatch> batches = new ArrayList<>(); boolean failed = false;
+            boolean failed = false;
             for (String id : ids) {
                 if (policy.revision() != revision) break;
                 try {
-                    SourceRepository.ChannelBatch first = sources.loadChannel(id); batches.add(first);
-                    if (first.hasMore) batches.add(sources.loadMore(id));
+                    SourceRepository.ChannelBatch first = channelLoader.load(id, false);
+                    main.post(() -> acceptAllowedBatch(first, revision));
                 } catch (Exception error) { failed = true; }
             }
             final boolean complete = !failed;
             main.post(() -> {
                 loadingMore = false;
-                for (SourceRepository.ChannelBatch batch : batches) acceptAllowedBatch(batch, revision);
                 if (complete && policy.revision() == revision)
                     prefs.edit().putLong("datedCatalogRefresh", System.currentTimeMillis()).apply();
                 changed();
@@ -155,21 +183,21 @@ public final class ProofState {
         ids.removeIf(id -> !policy.allowsChannel(id) || onlyChannel != null && !onlyChannel.equals(id));
         if (ids.isEmpty()) return;
         loadingMore = true;
+        changed();
         final long revision = policy.revision();
         worker.execute(() -> {
-            List<SourceRepository.ChannelBatch> batches = new ArrayList<>();
             int failures = 0;
             for (String id : ids) {
                 if (!policy.allowsChannel(id) || policy.revision() != revision) break;
                 try {
-                    if (!sources.hasCursor(id)) batches.add(sources.loadChannel(id));
-                    else if (sources.hasMore(id)) batches.add(sources.loadMore(id));
+                    SourceRepository.ChannelBatch batch = !sources.hasCursor(id) ? channelLoader.load(id, false)
+                            : sources.hasMore(id) ? channelLoader.load(id, true) : null;
+                    if (batch != null) main.post(() -> acceptAllowedBatch(batch, revision));
                 } catch (Exception error) { failures++; }
             }
             final int errors = failures;
             main.post(() -> {
                 loadingMore = false;
-                for (SourceRepository.ChannelBatch batch : batches) acceptAllowedBatch(batch, revision);
                 done.accept(errors > 0 ? "Some channels could not load. Scroll again to retry." : "");
             });
         });

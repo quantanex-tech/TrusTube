@@ -21,12 +21,26 @@ check the result and choose **Add**. Try **checker tobi** rather than needing to
 See the [testing guide](docs/TESTING.md). The alpha uses a development signing key;
 future production signing/package changes may require reinstalling and setting up again.
 
+### Updates with Obtainium
+
+In [Obtainium](https://github.com/ImranR98/Obtainium), add
+`https://github.com/quantanex-tech/TrusTube` and enable **Include prereleases**.
+Leave **Verify Latest Tag** disabled while releases are alphas. Each release
+provides one universal APK; no architecture filter is needed.
+
+Published APKs retain the app ID and signing certificate so Android can update
+an existing TrusTube installation in place. Each new release increases the Android
+version code. Installing an update preserves local settings and subscriptions;
+uninstalling first would remove app data.
+
 ## What works
 
 - Parent PIN setup and settings that relock on leaving or backgrounding.
 - Parent-only channel discovery and explicit approval of a selected result.
+- Parent-controlled channel file export/import for transferring subscriptions between devices.
 - Home, Favorites, Search, Channels and Parent tabs.
 - Persistent favourites and child search within approved subscriptions.
+- Resume unfinished videos, with purple progress bars on thumbnails.
 - Upload-date ordering and additional channel/video pages.
 - Native landscape playback, remaining video time and a subscribed-video rail.
 - Controls that hide while playing and stay visible while paused.
@@ -43,6 +57,16 @@ the same type overlap, the smallest allowance applies. Today replaces that type'
 weekly limit until local midnight; changing a limit keeps time already used.
 Bonus-time grants, multiple profiles, PIN recovery and iOS are not implemented.
 Source extraction can break when YouTube changes.
+
+To transfer subscriptions, open **Parent → Export subscribed channels**, share the
+JSON file, then use **Parent → Import subscribed channels** on the other device.
+Unlock again after choosing the file, review it and merge. Existing blocks and
+settings stay in place. See [channel transfer](docs/CHANNEL_TRANSFER.md).
+
+Resume progress stays on this device and starts recording after the update.
+It remembers up to 200 recent unfinished videos, including favourites, saving
+about every 15 seconds and when playback pauses or closes. Finished videos replay
+from the beginning; favourites stay saved. Clearing app data also clears progress.
 
 ## Build and check
 

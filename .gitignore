@@ -5,6 +5,7 @@ out/
 .idea/
 *.iml
 .toolchain/
+/family-web/
 
 # Local agent/workflow state and credentials are not publication inputs.
 /.agents/

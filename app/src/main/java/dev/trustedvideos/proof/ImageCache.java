@@ -18,8 +18,9 @@ import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import okhttp3.OkHttpClient;
@@ -34,15 +35,44 @@ final class ImageCache {
             Math.max(8L * 1024 * 1024, Runtime.getRuntime().maxMemory() / 8))) {
         @Override protected int sizeOf(String key, Bitmap value) { return value.getByteCount(); }
     };
-    private final Map<String, List<Consumer<Bitmap>>> pending = new HashMap<>();
-    private final ExecutorService worker = Executors.newFixedThreadPool(3);
+    private final Map<String, Job> pending = new HashMap<>();
+    private final ThreadPoolExecutor worker = (ThreadPoolExecutor) Executors.newFixedThreadPool(3);
     private final Handler main = new Handler(Looper.getMainLooper());
     interface Fetcher { Bitmap fetch(String url) throws Exception; }
     private final Fetcher fetcher;
+    interface Subscription { void cancel(); }
+    private static final Subscription NONE = () -> {};
+    private final class Load implements Subscription {
+        final Job job;
+        final Consumer<Bitmap> callback;
+        volatile boolean cancelled;
+        Load(Job job, Consumer<Bitmap> callback) { this.job = job; this.callback = callback; }
+        @Override public void cancel() {
+            synchronized (pending) {
+                cancelled = true; job.loads.remove(this);
+                if (!job.loads.isEmpty()) return;
+                job.cancelled = true;
+                if (pending.get(job.url) == job) pending.remove(job.url);
+                if (job.call != null) job.call.cancel();
+                job.task.cancel(true); worker.remove(job.task);
+            }
+        }
+    }
+    private final class Job {
+        final String url;
+        final List<Load> loads = new ArrayList<>();
+        final FutureTask<Void> task;
+        volatile boolean cancelled;
+        volatile okhttp3.Call call;
+        Job(String url) {
+            this.url = url;
+            task = new FutureTask<>(() -> { fetch(this); return null; });
+        }
+    }
     private static final OkHttpClient CLIENT = new OkHttpClient.Builder()
             .followRedirects(false).callTimeout(15, TimeUnit.SECONDS).build();
 
-    ImageCache(Context context) { this(new File(context.getCacheDir(), "artwork-v1"), ImageCache::download); }
+    ImageCache(Context context) { this(new File(context.getCacheDir(), "artwork-v1"), null); }
     ImageCache(File directory, Fetcher fetcher) { this.directory = directory; this.fetcher = fetcher; }
     static boolean allowed(String url) {
         if (url == null || url.isEmpty()) return false;
@@ -52,32 +82,41 @@ final class ImageCache {
                     && (host.endsWith(".ytimg.com") || host.endsWith(".ggpht.com") || host.endsWith(".googleusercontent.com"));
         } catch (RuntimeException error) { return false; }
     }
-    void load(String url, Consumer<Bitmap> callback) {
-        if (!allowed(url)) return;
+    Subscription load(String url, Consumer<Bitmap> callback) {
+        if (!allowed(url)) return NONE;
         Bitmap cached = memory.get(url);
-        if (cached != null) { callback.accept(cached); return; }
+        if (cached != null) { callback.accept(cached); return NONE; }
         synchronized (pending) {
-            List<Consumer<Bitmap>> callbacks = pending.get(url);
-            if (callbacks != null) { callbacks.add(callback); return; }
-            pending.put(url, new ArrayList<>(List.of(callback)));
+            Job job = pending.get(url);
+            boolean start = job == null;
+            if (start) { job = new Job(url); pending.put(url, job); }
+            Load load = new Load(job, callback); job.loads.add(load);
+            if (start) worker.execute(job.task);
+            return load;
         }
-        worker.execute(() -> {
-            Bitmap bitmap = null;
-            try {
-                File file = new File(directory, key(url) + ".png");
-                if (file.isFile() && System.currentTimeMillis() - file.lastModified() < MAX_AGE)
-                    bitmap = BitmapFactory.decodeFile(file.getPath());
-                if (bitmap == null) {
-                    bitmap = fetcher.fetch(url);
-                    if (bitmap != null) write(file, bitmap);
-                } else file.setLastModified(System.currentTimeMillis());
-                if (bitmap != null) memory.put(url, bitmap);
-            } catch (Exception ignored) { /* Keep placeholders on network/storage failure. */ }
-            final Bitmap result = bitmap;
-            final List<Consumer<Bitmap>> callbacks;
-            synchronized (pending) { callbacks = pending.remove(url); }
-            if (result != null) main.post(() -> callbacks.forEach(listener -> listener.accept(result)));
-        });
+    }
+    private void fetch(Job job) {
+        Bitmap bitmap = null;
+        try {
+            if (job.cancelled) return;
+            File file = new File(directory, key(job.url) + ".png");
+            if (file.isFile() && System.currentTimeMillis() - file.lastModified() < MAX_AGE)
+                bitmap = BitmapFactory.decodeFile(file.getPath());
+            if (bitmap == null) {
+                bitmap = fetcher == null ? download(job) : fetcher.fetch(job.url);
+                if (bitmap != null && !job.cancelled) write(file, bitmap);
+            } else file.setLastModified(System.currentTimeMillis());
+            if (bitmap != null && !job.cancelled) memory.put(job.url, bitmap);
+        } catch (Exception ignored) { /* Keep placeholders on network/storage failure. */ }
+        final Bitmap result = bitmap;
+        final List<Load> callbacks;
+        synchronized (pending) {
+            if (pending.get(job.url) == job) pending.remove(job.url);
+            callbacks = new ArrayList<>(job.loads);
+        }
+        if (result != null && !job.cancelled) main.post(() -> callbacks.forEach(load -> {
+            if (!load.cancelled) load.callback.accept(result);
+        }));
     }
     private void write(File file, Bitmap bitmap) {
         try {
@@ -100,8 +139,10 @@ final class ImageCache {
         StringBuilder key = new StringBuilder(); for (byte value : hash) key.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
         return key.toString();
     }
-    private static Bitmap download(String url) throws Exception {
-        try (Response response = CLIENT.newCall(new Request.Builder().url(url).build()).execute()) {
+    private Bitmap download(Job job) throws Exception {
+        job.call = CLIENT.newCall(new Request.Builder().url(job.url).build());
+        if (job.cancelled) { job.call.cancel(); return null; }
+        try (Response response = job.call.execute()) {
             if (!response.isSuccessful() || response.body() == null || response.body().contentLength() > 8 * 1024 * 1024) return null;
             byte[] bytes;
             try (java.io.InputStream input = response.body().byteStream(); java.io.ByteArrayOutputStream output = new java.io.ByteArrayOutputStream()) {
@@ -121,5 +162,11 @@ final class ImageCache {
             return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         }
     }
-    void close() { worker.shutdownNow(); }
+    void close() {
+        synchronized (pending) {
+            for (Job job : new ArrayList<>(pending.values()))
+                for (Load load : new ArrayList<>(job.loads)) load.cancel();
+        }
+        worker.shutdownNow();
+    }
 }

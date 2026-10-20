@@ -327,18 +327,22 @@ public class MainActivityTest {
             TimerPage page = ReflectionHelpers.getField(activity, "timers");
             com.google.android.material.bottomsheet.BottomSheetDialog sheet = ReflectionHelpers.getField(page, "sheet");
             View editor = sheet.getWindow().getDecorView();
+            findText(editor, "+").performClick();
+            assertNotNull(findText(editor, "1 h 5 min"));
+            findText(editor, "−").performClick();
+            assertNotNull(findText(editor, "1 h"));
             findText(editor, "−").performClick(); findText(editor, "−").performClick();
             findText(editor, "Apply to all days of the week").performClick(); findText(editor, "Done").performClick();
             findText(root, "Save timer").performClick();
-            assertArrayEquals(new int[]{30,30,30,30,30,30,30}, state.timers.schedules().get(0).days());
+            assertArrayEquals(new int[]{50,50,50,50,50,50,50}, state.timers.schedules().get(0).days());
             findText(root, "Today  ›").performClick(); findText(root, "Change today's limit").performClick();
             sheet = ReflectionHelpers.getField(page, "sheet"); editor = sheet.getWindow().getDecorView();
             findSpinner(editor).setSelection(1); Shadows.shadowOf(Looper.getMainLooper()).idle();
             findText(editor, "Daily limit").performClick();
-            for (int i=0;i<4;i++) findText(editor, "−").performClick();
+            for (int i=0;i<12;i++) findText(editor, "−").performClick();
             findText(editor, "Done").performClick();
             assertEquals(0, state.timers.allowance(dev.trustedvideos.proof.core.TimerSchedule.Type.APP));
-            assertEquals(30, state.timers.allowance(dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING));
+            assertEquals(50, state.timers.allowance(dev.trustedvideos.proof.core.TimerSchedule.Type.WATCHING));
             assertTrue(state.appExpired());
         }
         state.worker.shutdownNow(); state.credentials.shutdownNow();
@@ -358,6 +362,46 @@ public class MainActivityTest {
                 new VideoEntry("abcdefghijk", CHANNEL, "Test", "Refreshed", "", 60, 0)), false));
         assertEquals(123456, state.allowedEntries().get(0).uploadedAtMs);
         state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void channelDocumentPickerRelocksParentsAndStaleImportConfirmationCannotApply() throws Exception {
+        ProofState state = fixture();
+        var incoming = List.of(new dev.trustedvideos.proof.core.ChannelTransfer.Channel("UCbbbbbbbbbbbbbbbbbbbbbb", "Another channel", false));
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            unlockParent(root, state);
+            findText(root, "Export subscribed channels").performClick();
+            var started = Shadows.shadowOf(activity).getNextStartedActivityForResult();
+            assertEquals(android.content.Intent.ACTION_CREATE_DOCUMENT, started.intent.getAction());
+            assertEquals("application/json", started.intent.getType());
+            controller.pause().resume();
+            assertNotNull(findText(root, "Unlock parent settings"));
+            assertNull(findText(root, "Import subscribed channels"));
+            ReflectionHelpers.setField(activity, "pendingImport", incoming);
+            root.findViewWithTag(MainActivity.Tab.HOME).performClick();
+            unlockParent(root, state); findText(root, "Review channel import (1)").performClick();
+            AlertDialog confirm = ShadowAlertDialog.getLatestAlertDialog();
+            View stale = confirm.getButton(AlertDialog.BUTTON_POSITIVE);
+            controller.pause(); stale.performClick();
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertFalse(state.policy.channels().contains("UCbbbbbbbbbbbbbbbbbbbbbb"));
+            controller.resume();
+            root.findViewWithTag(MainActivity.Tab.HOME).performClick();
+            unlockParent(root, state); findText(root, "Review channel import (1)").performClick();
+            // Avoid real network refresh in this deterministic import check.
+            state.timers.today(dev.trustedvideos.proof.core.TimerSchedule.Type.APP, 0);
+            state.toggleFavorite("lmnopqrstuv");
+            state.blockChannel(CHANNEL); state.blockVideo("abcdefghijk");
+            ShadowAlertDialog.getLatestAlertDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertTrue(state.policy.allowsChannel("UCbbbbbbbbbbbbbbbbbbbbbb"));
+            assertFalse(state.policy.allowsChannel(CHANNEL));
+            assertTrue(state.policy.blockedVideos().contains("abcdefghijk"));
+            assertTrue(state.isFavorite("lmnopqrstuv")); assertTrue(state.appExpired());
+            assertTrue(state.verifyPin("582901"));
+            ProofState restored = new ProofState(activity);
+            assertTrue(restored.policy.allowsChannel("UCbbbbbbbbbbbbbbbbbbbbbb"));
+            restored.worker.shutdownNow(); restored.credentials.shutdownNow();
+        } finally { state.worker.shutdownNow(); state.credentials.shutdownNow(); }
     }
     private static void unlockParent(View root, ProofState state) throws Exception {
         root.findViewWithTag(MainActivity.Tab.PARENT).performClick();

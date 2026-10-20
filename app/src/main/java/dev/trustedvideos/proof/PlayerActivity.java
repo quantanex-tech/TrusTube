@@ -9,6 +9,7 @@ import android.os.Looper;
 import android.util.Base64;
 import android.view.Gravity;
 import android.view.View;
+import android.view.WindowManager;
 import android.widget.FrameLayout;
 import android.widget.PopupMenu;
 import android.view.KeyEvent;
@@ -50,6 +51,8 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     private java.util.List<ResolvedPlayback.AudioOption> audioOptions = java.util.List.of();
     private long resumeAt;
     private boolean resumePlaying = true;
+    private boolean progressReady;
+    private long lastProgressSave;
     private android.app.AlertDialog audioDialog;
     private final Handler handler = new Handler(Looper.getMainLooper());
     private final Runnable changed = this::permissionsChanged;
@@ -57,6 +60,8 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         @Override public void run() {
             if (!active) return;
             state.updateUsage(true, player.isPlaying());
+            if (android.os.SystemClock.elapsedRealtime() - lastProgressSave >= WatchProgress.SAVE_INTERVAL_MS)
+                saveProgress();
             updateControls();
             if (state.expired()) deny("Viewing time is up. Ask a parent for help.");
             handler.postDelayed(this, 1000);
@@ -77,12 +82,17 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         player = new ExoPlayer.Builder(this).setMediaSourceFactory(sourceFactory).build();
         playerView.setPlayer(player);
         player.addListener(new Player.Listener() {
+            @Override public void onEvents(Player player, Player.Events events) { updateKeepScreenOn(); }
             @Override public void onIsPlayingChanged(boolean playing) {
                 state.updateUsage(active, playing);
+                if (!playing) saveProgress();
                 if (controls != null) controls.setPlaying(player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_ENDED);
             }
             @Override public void onPlaybackStateChanged(int playbackState) {
-                if (playbackState == Player.STATE_ENDED) { controls.setPlaying(false); controls.show(); updateControls(); }
+                if (playbackState == Player.STATE_READY) progressReady = true;
+                if (playbackState == Player.STATE_ENDED) {
+                    saveProgress(); controls.setPlaying(false); controls.show(); updateControls();
+                }
             }
             @Override public void onPlayerError(PlaybackException error) {
                 resumeAt = player.getCurrentPosition(); resumePlaying = player.getPlayWhenReady();
@@ -100,7 +110,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
                 }
                 controls.setPlaying(player.getPlayWhenReady());
             }
-            public void favorite() { if (selected != null) state.toggleFavorite(selected.id); updateControls(); }
+            public void favorite() { saveProgress(); if (selected != null) state.toggleFavorite(selected.id); updateControls(); }
             public void menu(View anchor) { showMenu(anchor); }
             public void seek(long position) {
                 if (active && selected != null && state.policy.allows(selected.id, selected.channelId) && !state.expired())
@@ -119,16 +129,27 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         FrameLayout.LayoutParams panel = new FrameLayout.LayoutParams(Ui.dp(this, 330), -2, Gravity.CENTER);
         root.addView(messagePanel, panel);
         setContentView(root);
-        selected = state.find(getIntent().getStringExtra("videoId"));
+        selected = state.find(saved == null ? getIntent().getStringExtra("videoId") : saved.getString("videoId"));
+        resumeAt = state.resumePosition(selected);
+        if (saved != null) resumePlaying = false;
         updateControls(); refreshRail();
+    }
+    @Override protected void onSaveInstanceState(Bundle saved) {
+        saveProgress();
+        if (selected != null) saved.putString("videoId", selected.id);
+        super.onSaveInstanceState(saved);
     }
     @Override protected void onResume() {
         super.onResume(); active = true; state.subscribe(changed); controls.holdMenu(false);
+        LazyImages.setActive(this, true);
         permissionsChanged(); if (isFinishing()) return; clock.run();
+        updateKeepScreenOn();
         if (player.getMediaItemCount() == 0 && selected != null && !state.expired()) retry();
     }
     @Override protected void onPause() {
-        active = false; handler.removeCallbacks(clock);
+        saveProgress();
+        LazyImages.setActive(this, false);
+        active = false; updateKeepScreenOn(); handler.removeCallbacks(clock);
         if (player.getMediaItemCount() > 0) resumeAt = player.getCurrentPosition();
         resumePlaying = false;
         state.updateUsage(false, false); player.pause();
@@ -141,8 +162,18 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         state.invalidateParentActions();
     }
     @Override protected void onDestroy() {
+        active = false; updateKeepScreenOn();
         handler.removeCallbacksAndMessages(null); controls.stop();
         playerView.setPlayer(null); player.release(); super.onDestroy();
+    }
+    private void updateKeepScreenOn() {
+        int playbackState = player.getPlaybackState();
+        // Keep protection through rebuffering, but release it when viewing stops or is suppressed.
+        boolean keepAwake = active && !isFinishing() && player.getPlayWhenReady()
+                && player.getPlaybackSuppressionReason() == Player.PLAYBACK_SUPPRESSION_REASON_NONE
+                && (playbackState == Player.STATE_READY || playbackState == Player.STATE_BUFFERING);
+        if (keepAwake) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
     }
     private void updateControls() {
         if (selected == null) return;
@@ -171,7 +202,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         if (state.testRemainingMs() >= 0)
             menu.getMenu().add("Proof timer left: " + Ui.duration(state.testRemainingMs())).setEnabled(false);
         menu.getMenu().add(state.isFavorite(selected.id) ? "Remove favorite" : "Add favorite")
-                .setOnMenuItemClickListener(item -> { state.toggleFavorite(selected.id); return true; });
+                .setOnMenuItemClickListener(item -> { saveProgress(); state.toggleFavorite(selected.id); return true; });
         menu.getMenu().add("Block this video").setOnMenuItemClickListener(item -> {
             showBlock(false); return true;
         });
@@ -185,8 +216,10 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         audioDialog.setOnDismissListener(dialog -> controls.holdMenu(false));
     }
     private void stopAndFinish() {
+        saveProgress(); progressReady = false;
         active = false; gate.cancel(); request++; if (pending != null) pending.cancel(true);
         player.stop(); player.clearMediaItems();
+        updateKeepScreenOn();
         setResult(RESULT_OK, new android.content.Intent().putExtra("returnHome", true)); finish();
     }
     private void permissionsChanged() {
@@ -206,7 +239,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         controls.show(); return super.onKeyDown(key, event);
     }
     private void play(VideoEntry entry) {
-        startPlayback(entry, null, 0, true);
+        startPlayback(entry, null, state.resumePosition(entry), true);
     }
     private void retry() { if (selected != null) startPlayback(selected, requestedAudio, resumeAt, resumePlaying); }
     private void chooseAudio() {
@@ -230,6 +263,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     }
     private void startPlayback(VideoEntry entry, String audioId, long position, boolean shouldPlay) {
         if (!active || !state.pinSet()) return;
+        saveProgress(); progressReady = false;
         requestedAudio = audioId; resumeAt = position; resumePlaying = shouldPlay;
         audioOptions = java.util.List.of(); selectedAudio = "";
         state.updateUsage(true, player.isPlaying()); player.stop(); player.clearMediaItems();
@@ -277,9 +311,18 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         return sourceFactory.createMediaSource(item.build());
     }
     private void deny(String reason) {
+        saveProgress(); progressReady = false;
         gate.cancel(); request++; loading = false;
         if (pending != null) pending.cancel(true);
         player.stop(); player.clearMediaItems();
+        updateKeepScreenOn();
         message.setText(reason); messagePanel.setVisibility(View.VISIBLE); controls.setPlaying(false); controls.show();
+    }
+    private void saveProgress() {
+        if (!progressReady || selected == null || player.getMediaItemCount() == 0 || player.isCurrentMediaItemLive()) return;
+        long position = Math.max(0, player.getCurrentPosition()), duration = player.getDuration();
+        state.progress.save(selected.id, position, duration, player.getPlaybackState() == Player.STATE_ENDED);
+        resumeAt = position;
+        lastProgressSave = android.os.SystemClock.elapsedRealtime();
     }
 }

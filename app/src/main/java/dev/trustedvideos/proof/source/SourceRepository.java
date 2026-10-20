@@ -143,8 +143,10 @@ public final class SourceRepository {
         cursors.put(channelId, new Cursor(cursor.channel, cursor.tab, page.getNextPage()));
         return batch(cursor.channel, page.getItems(), page.getNextPage());
     }
-    public synchronized boolean hasCursor(String channelId) { return cursors.containsKey(channelId); }
-    public synchronized boolean hasMore(String channelId) {
+    // Cursor snapshots are immutable and the map is concurrent. UI reads must never
+    // wait for loadChannel/loadMore, whose extraction can spend seconds on network IO.
+    public boolean hasCursor(String channelId) { return cursors.containsKey(channelId); }
+    public boolean hasMore(String channelId) {
         Cursor cursor = cursors.get(channelId);
         return cursor == null || Page.isValid(cursor.page);
     }

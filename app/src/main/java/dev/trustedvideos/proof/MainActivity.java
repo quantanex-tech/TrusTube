@@ -20,6 +20,7 @@ import android.widget.ImageView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import dev.trustedvideos.proof.core.VideoEntry;
+import dev.trustedvideos.proof.core.ChannelTransfer;
 import dev.trustedvideos.proof.source.SourceRepository;
 import java.util.ArrayList;
 import java.util.List;
@@ -40,6 +41,11 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     private Tab tab = Tab.HOME;
     private String selectedChannel;
     private String notice = "";
+    private static final int EXPORT_CHANNELS = 101, IMPORT_CHANNELS = 102;
+    private String pendingExport;
+    private List<ChannelTransfer.Channel> pendingImport;
+    private boolean expectingImport;
+    private long importRequest;
     private final Runnable changed = this::render;
     private final Runnable clock = new Runnable() {
         @Override public void run() {
@@ -127,10 +133,12 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     }
     @Override protected void onResume() {
         super.onResume(); active = true; state.subscribe(changed); render(); clock.run();
+        LazyImages.setActive(this, true);
         // Network refresh is opt-in through real channel data, never for an empty setup.
         state.refreshAllowedIfNeeded();
     }
     @Override protected void onPause() {
+        LazyImages.setActive(this, false);
         active = false; handler.removeCallbacks(clock); state.updateUsage(false, false);
         state.unsubscribe(changed); state.invalidateParentActions(); parentUnlocked = false;
         if (parentDialog != null) parentDialog.dismiss();
@@ -194,6 +202,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         if (entries.isEmpty()) cards.addView(Ui.text(this, tab == Tab.FAVORITES
                 ? "Tap a video's star to save it here."
                 : state.policy.channels().isEmpty() ? "Ask a parent to add your first channel."
+                : state.loadingMore() ? "Loading your channels…"
                 : "No videos to show yet. Try loading more from your channels.", 17, false));
         if (tab != Tab.FAVORITES && state.canLoadMore(selectedChannel))
             cards.addView(Ui.button(this, state.loadingMore() ? "Loading…" : "Load more videos", this::loadMore));
@@ -235,6 +244,35 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     }
     @Override protected void onActivityResult(int request, int result, Intent data) {
         super.onActivityResult(request, result, data);
+        if (request == EXPORT_CHANNELS) {
+            final String snapshot = pendingExport; pendingExport = null;
+            if (result != RESULT_OK || data == null || data.getData() == null || snapshot == null) return;
+            final android.net.Uri uri = data.getData();
+            state.worker.execute(() -> {
+                try (java.io.OutputStream out = getContentResolver().openOutputStream(uri, "wt")) {
+                    if (out == null) throw new java.io.IOException("Could not open the selected file.");
+                    out.write(snapshot.getBytes(java.nio.charset.StandardCharsets.UTF_8));
+                    runOnUiThread(() -> { notice = "Channels exported. Share this file with your other device."; if (!isDestroyed()) render(); });
+                } catch (Exception error) { runOnUiThread(() -> { if (!isDestroyed()) Ui.error(this, error); }); }
+            });
+            return;
+        }
+        if (request == IMPORT_CHANNELS) {
+            boolean expected = expectingImport; expectingImport = false;
+            if (!expected || result != RESULT_OK || data == null || data.getData() == null) return;
+            final android.net.Uri uri = data.getData(); final long token = importRequest;
+            state.worker.execute(() -> {
+                try (java.io.InputStream in = getContentResolver().openInputStream(uri)) {
+                    if (in == null) throw new java.io.IOException("Could not read the selected file.");
+                    List<ChannelTransfer.Channel> rows = ChannelTransfer.read(in);
+                    runOnUiThread(() -> {
+                        if (isDestroyed() || token != importRequest) return;
+                        pendingImport = rows; notice = "Channel file ready. Unlock Parents to review and import it."; render();
+                    });
+                } catch (Exception error) { runOnUiThread(() -> { if (!isDestroyed() && token == importRequest) Ui.error(this, error); }); }
+            });
+            return;
+        }
         if (request == 1 && result == RESULT_OK && data != null && data.getBooleanExtra("returnHome", false)) {
             if (tab != Tab.HOME) selectTab(Tab.HOME); else { selectedChannel = null; buildPage(); }
         }
@@ -289,6 +327,9 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         }
         cards.addView(Ui.text(this, "Settings lock as soon as you leave this tab.", 14, false));
         cards.addView(Ui.button(this, "Add a trusted channel", this::addChannel));
+        cards.addView(Ui.button(this, "Export subscribed channels", this::exportChannels));
+        cards.addView(Ui.button(this, "Import subscribed channels", this::pickChannelImport));
+        if (pendingImport != null) cards.addView(Ui.button(this, "Review channel import (" + pendingImport.size() + ")", this::confirmChannelImport));
         cards.addView(Ui.button(this, "Refresh / load another page", () -> chooseChannel(false)));
         cards.addView(Ui.button(this, "Remove a channel", () -> chooseChannel(true)));
         cards.addView(Ui.button(this, "Restore blocked content", this::restoreBlocks));
@@ -309,6 +350,44 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         cards.addView(Ui.text(this, "One local profile · Daily schedules are managed separately from proof timers.", 13, false));
     }
     private void closeTimers() { if (timers != null) { timers.close(); timers = null; } }
+    private boolean authorizedParent() { return active && tab == Tab.PARENT && parentUnlocked; }
+    private void exportChannels() {
+        if (!authorizedParent()) return;
+        try {
+            pendingExport = state.exportChannels();
+            startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("application/json").putExtra(Intent.EXTRA_TITLE, "TrusTube-channels.json"), EXPORT_CHANNELS);
+        } catch (Exception error) { pendingExport = null; Ui.error(this, error); }
+    }
+    private void pickChannelImport() {
+        if (!authorizedParent()) return;
+        pendingImport = null; importRequest++; expectingImport = true;
+        try {
+            startActivityForResult(new Intent(Intent.ACTION_OPEN_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
+                    .setType("*/*").putExtra(Intent.EXTRA_MIME_TYPES, new String[]{"application/json", "text/plain", "application/octet-stream"}), IMPORT_CHANNELS);
+        } catch (Exception error) { expectingImport = false; Ui.error(this, error); }
+    }
+    private void confirmChannelImport() {
+        if (!authorizedParent() || pendingImport == null) return;
+        final List<ChannelTransfer.Channel> rows = pendingImport;
+        final long epoch = state.parentEpoch();
+        StringBuilder preview = new StringBuilder("Merge " + rows.size() + " channels. Existing blocks, timers and favourites stay in place.\n\n");
+        for (int i = 0; i < Math.min(20, rows.size()); i++) {
+            ChannelTransfer.Channel row = rows.get(i);
+            preview.append(row.name.isBlank() ? row.id : row.name).append(row.blocked ? " (blocked)" : "").append('\n');
+        }
+        if (rows.size() > 20) preview.append("… and ").append(rows.size() - 20).append(" more");
+        parentDialog = new AlertDialog.Builder(this).setTitle("Import subscribed channels?").setMessage(preview)
+                .setNegativeButton("Cancel", (d, w) -> { pendingImport = null; render(); })
+                .setPositiveButton("Merge channels", (d, w) -> {
+                    if (!authorizedParent() || epoch != state.parentEpoch() || pendingImport != rows) return;
+                    try {
+                        int added = state.importChannels(rows); pendingImport = null;
+                        notice = "Imported " + rows.size() + " channels (" + added + " new). Loading their videos…";
+                        render(); state.refreshAllowedIfNeeded();
+                    } catch (IllegalArgumentException error) { Ui.error(this, error); }
+                }).show();
+    }
     private void addChannel() {
         parentDialog = new ChannelSearchDialog(this, state,
                 () -> active && tab == Tab.PARENT && parentUnlocked,

@@ -139,6 +139,20 @@ final class Ui {
         thumbnail.setBackground(background(Color.rgb(196, 196, 196), 12, activity));
         thumbnail.setImageResource(R.drawable.ic_video_placeholder);
         imageFrame.addView(thumbnail, new FrameLayout.LayoutParams(-1, -2));
+        WatchProgress.Entry progress = state.progress(entry);
+        if (progress != null) {
+            View bar = new View(activity) {
+                private final android.graphics.Paint paint = new android.graphics.Paint();
+                @Override protected void onDraw(android.graphics.Canvas canvas) {
+                    paint.setColor(0xB3FFFFFF); canvas.drawRect(0, 0, getWidth(), getHeight(), paint);
+                    paint.setColor(PURPLE);
+                    canvas.drawRect(0, 0, (float) (getWidth() * progress.fraction()), getHeight(), paint);
+                }
+            };
+            bar.setTag("watch-progress");
+            bar.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+            imageFrame.addView(bar, new FrameLayout.LayoutParams(-1, dp(activity, 4), Gravity.BOTTOM));
+        }
         ImageButton more = icon(activity, R.drawable.ic_more, "Options for " + entry.title, Color.WHITE, () -> {});
         more.setOnClickListener(view -> blockMenu(activity, state, more, entry));
         if (!compact) imageFrame.addView(more, new FrameLayout.LayoutParams(dp(activity, 48), dp(activity, 48), Gravity.TOP | Gravity.END));
@@ -148,20 +162,14 @@ final class Ui {
         title.setSingleLine(); title.setEllipsize(TextUtils.TruncateAt.END);
         title.setPadding(0, dp(activity, 3), 0, 0);
         if (!compact) card.addView(title);
-        card.setContentDescription(entry.title + " · " + entry.channelName);
+        card.setContentDescription(entry.title + " · " + entry.channelName
+                + (progress == null ? "" : " · Resume at " + duration(progress.positionMs)));
         card.setFocusable(true); card.setClickable(true); card.setOnClickListener(view -> play.run());
         card.setOnLongClickListener(view -> { blockMenu(activity, state, card, entry); return true; });
         return card;
     }
     static void image(Activity activity, ProofState state, ImageView view, String url) {
-        view.setTag(url);
         if (images == null) images = new ImageCache(activity.getApplicationContext());
-        java.lang.ref.WeakReference<Activity> owner = new java.lang.ref.WeakReference<>(activity);
-        java.lang.ref.WeakReference<ImageView> target = new java.lang.ref.WeakReference<>(view);
-        images.load(url, bitmap -> {
-            Activity current = owner.get(); ImageView image = target.get();
-            if (current != null && image != null && !current.isDestroyed() && url.equals(image.getTag()))
-                image.setImageBitmap(bitmap);
-        });
+        LazyImages.bind(activity, view, url, images);
     }
 }
