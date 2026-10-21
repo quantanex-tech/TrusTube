@@ -7,7 +7,7 @@ The alpha retains application ID `dev.trustedvideos.proof` for prototype updates
 - `MainActivity`: child tabs and PIN-protected parent settings.
 - `ChannelSearchDialog`: parent discovery, explicit Add and stale-result invalidation.
 - `SourceRepository`: channel/search pagination and verified media sources.
-- `ProofState`: one local catalog, favourites, proof measurements and persistence;
+- `ProofState`: one local catalog, favourites, bounded watch history, proof measurements and persistence;
   refreshes all approved subscriptions' recent pages after upgrade/after six hours.
 - `DailyTimers` / `TimerSchedule` / `DailyUsage`: immutable per-day weekly rules,
   date-scoped Today overrides and persisted monotonic usage split at local midnight.
@@ -34,3 +34,10 @@ Material Components 1.14.0 provides the Material 3 Expressive theme, buttons,
 switches and bottom sheets. Audio selection retains each upload's track identity,
 defaults to original metadata and re-enters the same video/creator playback gate
 when switching. No persistent translated-audio preference is applied to other videos.
+
+Library groups Favorites and History without adding a sixth bottom destination.
+History stores up to 50 distinct video IDs in most-recently-watched order, with
+metadata drawn from the local catalog and filtered by current permissions. The
+player records once per play request when Media3 reports actual foreground
+playback for the selected media ID. Loading attempts, pauses and buffering do not
+create history entries. Clearing history requires unlocked Parent settings.

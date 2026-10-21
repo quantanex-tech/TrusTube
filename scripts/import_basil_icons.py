@@ -11,6 +11,7 @@ SOURCE = ROOT / 'assets/Basil Icons (Community)'
 ICONS = {
     'home': 'Outline/General/Home.svg',
     'favorite': 'Outline/Status/Star.svg',
+    'library': 'Outline/Files/Folder.svg',
     'favorite_filled': 'Solid/Status/Star.svg',
     'search': 'Outline/Interface/Search.svg',
     'channels': 'Outline/Interface/Apps.svg',

@@ -25,6 +25,7 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 public final class ProofState {
+    public static final int WATCH_HISTORY_LIMIT = 50;
     public final PermissionPolicy policy = new PermissionPolicy();
     public final UsageMeter meter;
     public final DailyTimers timers;
@@ -38,6 +39,7 @@ public final class ProofState {
     private final Map<String, String> channelNames = new LinkedHashMap<>();
     private final Map<String, String> channelAvatars = new LinkedHashMap<>();
     private final Map<String, Long> favorites = new LinkedHashMap<>();
+    private final List<String> watchHistory = new ArrayList<>();
     private final CopyOnWriteArrayList<Runnable> listeners = new CopyOnWriteArrayList<>();
     private boolean expiredNotified;
     private volatile long parentEpoch;
@@ -73,6 +75,14 @@ public final class ProofState {
             JSONObject savedFavorites = new JSONObject(prefs.getString("favorites", "{}"));
             savedFavorites.keys().forEachRemaining(id -> favorites.put(id, savedFavorites.optLong(id)));
         } catch (Exception ignored) { catalog.clear(); }
+        try {
+            JSONArray history = new JSONArray(prefs.getString("watchHistory", "[]"));
+            for (int i = 0; i < history.length() && watchHistory.size() < WATCH_HISTORY_LIMIT; i++) {
+                Object item = history.opt(i);
+                if (item instanceof String && PermissionPolicy.validVideoId((String) item)
+                        && !watchHistory.contains((String) item)) watchHistory.add((String) item);
+            }
+        } catch (Exception ignored) { watchHistory.clear(); }
     }
     public synchronized VideoEntry find(String id) { return catalog.get(id); }
     WatchProgress.Entry progress(VideoEntry entry) {
@@ -106,6 +116,28 @@ public final class ProofState {
         result.removeIf(entry -> !favorites.containsKey(entry.id));
         result.sort(Comparator.comparingLong((VideoEntry entry) -> favorites.get(entry.id)).reversed());
         return result;
+    }
+    public synchronized void recordWatched(String id) {
+        VideoEntry entry = catalog.get(id);
+        if (entry == null || !policy.allows(entry.id, entry.channelId)) return;
+        watchHistory.remove(id);
+        watchHistory.add(0, id);
+        if (watchHistory.size() > WATCH_HISTORY_LIMIT) watchHistory.remove(watchHistory.size() - 1);
+        saveHistory(); changed();
+    }
+    public synchronized List<VideoEntry> historyEntries() {
+        List<VideoEntry> result = new ArrayList<>();
+        for (String id : watchHistory) {
+            VideoEntry entry = catalog.get(id);
+            if (entry != null && policy.allows(entry.id, entry.channelId)) result.add(entry);
+        }
+        return result;
+    }
+    public synchronized void clearHistory() {
+        watchHistory.clear(); saveHistory(); changed();
+    }
+    private void saveHistory() {
+        prefs.edit().putString("watchHistory", new JSONArray(watchHistory).toString()).apply();
     }
     public synchronized Map<String, String> channels() { return new LinkedHashMap<>(channelNames); }
     public synchronized String avatar(String id) { return channelAvatars.getOrDefault(id, ""); }

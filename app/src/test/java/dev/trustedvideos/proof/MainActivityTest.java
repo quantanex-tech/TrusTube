@@ -39,6 +39,7 @@ public class MainActivityTest {
     private static final String CHANNEL = "UC513PdAP2-jWkJunTh5kXRw";
     private ProofState fixture() {
         ProofApplication app = (ProofApplication) RuntimeEnvironment.getApplication();
+        app.getSharedPreferences("watch-progress", Context.MODE_PRIVATE).edit().clear().commit();
         app.getSharedPreferences("proof", Context.MODE_PRIVATE).edit().clear()
                 .putLong("datedCatalogRefresh", System.currentTimeMillis())
                 .putStringSet("channels", Set.of(CHANNEL))
@@ -165,7 +166,7 @@ public class MainActivityTest {
             ShadowAlertDialog.getLatestAlertDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick();
             Shadows.shadowOf(Looper.getMainLooper()).idle();
             assertFalse(state.policy.allows("abcdefghijk", CHANNEL));
-            root.findViewWithTag(MainActivity.Tab.FAVORITES).performClick();
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
             activity.onActivityResult(1, Activity.RESULT_OK, new android.content.Intent().putExtra("returnHome", true));
             assertTrue(root.findViewWithTag(MainActivity.Tab.HOME).isSelected());
         }
@@ -197,7 +198,7 @@ public class MainActivityTest {
         ProofState state = fixture(); state.toggleFavorite("abcdefghijk");
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             View root = controller.get().getWindow().getDecorView();
-            root.findViewWithTag(MainActivity.Tab.FAVORITES).performClick();
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
             assertNotNull(findText(root, "Build a tiny rocket"));
             assertNull(findText(root, "Explore a clever machine"));
             root.findViewWithTag(MainActivity.Tab.SEARCH).performClick();
@@ -205,6 +206,186 @@ public class MainActivityTest {
             assertNull(findText(root, "Forbidden fixture"));
             findEdit(root).setText("rocket"); assertNotNull(findText(root, "Build a tiny rocket"));
             state.blockVideo("abcdefghijk"); Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertNull(findText(root, "Build a tiny rocket"));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test @Config(sdk = 28, qualifiers = "w360dp-h640dp-xxhdpi") @GraphicsMode(GraphicsMode.Mode.NATIVE)
+    public void libraryKeepsFiveDestinationsAndSwitchesAccessibleFavoritesAndHistorySections() throws Exception {
+        ProofState state = fixture();
+        state.toggleFavorite("abcdefghijk");
+        state.recordWatched("abcdefghijk"); state.recordWatched("lmnopqrstuv");
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            View root = controller.get().getWindow().getDecorView();
+            View library = root.findViewWithTag(MainActivity.Tab.LIBRARY);
+            ViewGroup navigation = (ViewGroup) library.getParent();
+            assertEquals(5, navigation.getChildCount());
+            assertEquals(5, MainActivity.Tab.values().length);
+            for (MainActivity.Tab destination : MainActivity.Tab.values()) {
+                View button = root.findViewWithTag(destination);
+                assertNotNull(button); assertSame(navigation, button.getParent());
+                assertTrue(button.isFocusable()); assertTrue(button.isClickable());
+            }
+            library.performClick();
+            assertTrue(library.isSelected());
+            TextView pageTitle = findText(root, "Library"); assertNotNull(pageTitle);
+            assertNotSame("Library needs a page title as well as its navigation label", library, pageTitle.getParent());
+            View favorites = root.findViewWithTag(MainActivity.LibrarySection.FAVORITES);
+            View history = root.findViewWithTag(MainActivity.LibrarySection.HISTORY);
+            assertTrue(favorites.isFocusable()); assertTrue(favorites.isClickable());
+            assertTrue(history.isFocusable()); assertTrue(history.isClickable());
+            assertTrue(favorites.isSelected()); assertFalse(history.isSelected());
+            assertNotNull(findText(root, "Favorites")); assertNotNull(findText(root, "History"));
+            assertNotNull(findText(root, "Build a tiny rocket"));
+            assertNull(findText(root, "Explore a clever machine"));
+
+            history.performClick();
+            assertTrue(root.findViewWithTag(MainActivity.LibrarySection.HISTORY).isSelected());
+            assertFalse(root.findViewWithTag(MainActivity.LibrarySection.FAVORITES).isSelected());
+            assertTrue(library.isSelected());
+            assertNotNull(findText(root, "Build a tiny rocket"));
+            assertNotNull(findText(root, "Explore a clever machine"));
+            List<String> visibleTitles = new java.util.ArrayList<>();
+            collectVideoTitles(root, visibleTitles);
+            assertEquals(List.of("Explore a clever machine", "Build a tiny rocket"), visibleTitles);
+            assertNull(findText(root, "Forbidden fixture"));
+
+            int width = 1080, height = 1920;
+            root.measure(View.MeasureSpec.makeMeasureSpec(width, View.MeasureSpec.EXACTLY),
+                    View.MeasureSpec.makeMeasureSpec(height, View.MeasureSpec.EXACTLY));
+            root.layout(0, 0, width, height);
+            Bitmap bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888);
+            root.draw(new Canvas(bitmap));
+            File output = new File("../out/watch-history-preview.png"); output.getParentFile().mkdirs();
+            try (FileOutputStream stream = new FileOutputStream(output)) { bitmap.compress(Bitmap.CompressFormat.PNG, 100, stream); }
+
+            root.findViewWithTag(MainActivity.LibrarySection.FAVORITES).performClick();
+            assertTrue(root.findViewWithTag(MainActivity.LibrarySection.FAVORITES).isSelected());
+            assertFalse(root.findViewWithTag(MainActivity.LibrarySection.HISTORY).isSelected());
+            assertNotNull(findText(root, "Build a tiny rocket"));
+            assertNull(findText(root, "Explore a clever machine"));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void emptyHistoryExplainsWhereWatchedVideosWillAppear() {
+        ProofState state = fixture(); state.toggleFavorite("abcdefghijk");
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            View root = controller.get().getWindow().getDecorView();
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            root.findViewWithTag(MainActivity.LibrarySection.HISTORY).performClick();
+            assertTrue(root.findViewWithTag(MainActivity.LibrarySection.HISTORY).isSelected());
+            assertNotNull(findText(root, "Videos you watch will appear here."));
+            assertNull(findText(root, "Build a tiny rocket"));
+            assertNull(findText(root, "Explore a clever machine"));
+            root.findViewWithTag(MainActivity.LibrarySection.FAVORITES).performClick();
+            assertNotNull(findText(root, "Build a tiny rocket"));
+            assertNull(findText(root, "Videos you watch will appear here."));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void blockedAndRemovedHistoryVideosDisappearAndStaleCardsCannotStartPlayback() {
+        ProofState state = fixture();
+        state.recordWatched("abcdefghijk"); state.recordWatched("lmnopqrstuv");
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            root.findViewWithTag(MainActivity.LibrarySection.HISTORY).performClick();
+            View blockedCard = (View) findText(root, "Build a tiny rocket").getParent();
+            state.blockVideo("abcdefghijk"); Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertNull(findText(root, "Build a tiny rocket"));
+            assertNotNull(findText(root, "Explore a clever machine"));
+            blockedCard.performClick();
+            assertNull(Shadows.shadowOf(activity).getNextStartedActivity());
+            View removedCard = (View) findText(root, "Explore a clever machine").getParent();
+            state.removeChannel(CHANNEL); Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertNull(findText(root, "Explore a clever machine"));
+            assertNotNull(findText(root, "Videos you watch will appear here."));
+            removedCard.performClick();
+            assertNull(Shadows.shadowOf(activity).getNextStartedActivity());
+            assertTrue(root.findViewWithTag(MainActivity.LibrarySection.HISTORY).isSelected());
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void returningFromPlayerKeepsTheHistorySectionSelected() {
+        ProofState state = fixture(); state.recordWatched("abcdefghijk");
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            root.findViewWithTag(MainActivity.LibrarySection.HISTORY).performClick();
+            ((View) findText(root, "Build a tiny rocket").getParent()).performClick();
+            android.content.Intent launched = Shadows.shadowOf(activity).getNextStartedActivity();
+            assertNotNull(launched); assertEquals(PlayerActivity.class.getName(), launched.getComponent().getClassName());
+            assertEquals("abcdefghijk", launched.getStringExtra("videoId"));
+            controller.pause();
+            activity.onActivityResult(1, Activity.RESULT_CANCELED, null);
+            controller.resume(); Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertTrue(root.findViewWithTag(MainActivity.Tab.LIBRARY).isSelected());
+            assertTrue(root.findViewWithTag(MainActivity.LibrarySection.HISTORY).isSelected());
+            assertFalse(root.findViewWithTag(MainActivity.LibrarySection.FAVORITES).isSelected());
+            assertNotNull(findText(root, "Build a tiny rocket"));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void openingPlayerDoesNotAddAVideoToHistoryBeforePlaybackStarts() {
+        ProofState state = fixture();
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
+            ((View) findText(root, "Build a tiny rocket").getParent()).performClick();
+            android.content.Intent launched = Shadows.shadowOf(activity).getNextStartedActivity();
+            assertNotNull(launched); assertEquals(PlayerActivity.class.getName(), launched.getComponent().getClassName());
+            assertEquals("abcdefghijk", launched.getStringExtra("videoId"));
+            assertTrue(state.historyEntries().isEmpty());
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            root.findViewWithTag(MainActivity.LibrarySection.HISTORY).performClick();
+            assertNotNull(findText(root, "Videos you watch will appear here."));
+        }
+        state.worker.shutdownNow(); state.credentials.shutdownNow();
+    }
+    @Test public void clearingHistoryRequiresUnlockedParentsAndConfirmationAndRejectsStaleCompletion() throws Exception {
+        ProofState state = fixture(); state.recordWatched("abcdefghijk");
+        try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
+            View root = controller.get().getWindow().getDecorView();
+            assertNull(findText(root, "Clear watch history"));
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            root.findViewWithTag(MainActivity.LibrarySection.HISTORY).performClick();
+            assertNull(findText(root, "Clear watch history"));
+            root.findViewWithTag(MainActivity.Tab.PARENT).performClick();
+            assertNull(findText(root, "Clear watch history"));
+            AlertDialog pin = ShadowAlertDialog.getLatestAlertDialog();
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            findEdit(pin.getWindow().getDecorView()).setText("582901");
+            pin.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            state.credentials.submit(() -> {}).get(5, TimeUnit.SECONDS);
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+
+            TextView clear = findText(root, "Clear watch history"); assertNotNull(clear); clear.performClick();
+            AlertDialog confirmation = ShadowAlertDialog.getLatestAlertDialog();
+            confirmation.getButton(AlertDialog.BUTTON_NEGATIVE).performClick();
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertEquals(List.of("abcdefghijk"), state.historyEntries().stream()
+                    .map(entry -> entry.id).collect(java.util.stream.Collectors.toList()));
+
+            findText(root, "Clear watch history").performClick();
+            ShadowAlertDialog.getLatestAlertDialog().getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertTrue(state.historyEntries().isEmpty());
+            ProofState restored = new ProofState(RuntimeEnvironment.getApplication());
+            assertTrue(restored.historyEntries().isEmpty());
+            restored.worker.shutdownNow(); restored.credentials.shutdownNow();
+
+            findText(root, "Clear watch history").performClick();
+            AlertDialog staleDialog = ShadowAlertDialog.getLatestAlertDialog();
+            View staleConfirmation = staleDialog.getButton(AlertDialog.BUTTON_POSITIVE);
+            root.findViewWithTag(MainActivity.Tab.HOME).performClick();
+            assertFalse(staleDialog.isShowing());
+            state.recordWatched("lmnopqrstuv");
+            staleConfirmation.performClick();
+            Shadows.shadowOf(Looper.getMainLooper()).idle();
+            assertEquals(List.of("lmnopqrstuv"), state.historyEntries().stream()
+                    .map(entry -> entry.id).collect(java.util.stream.Collectors.toList()));
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            root.findViewWithTag(MainActivity.LibrarySection.HISTORY).performClick();
+            assertNotNull(findText(root, "Explore a clever machine"));
             assertNull(findText(root, "Build a tiny rocket"));
         }
         state.worker.shutdownNow(); state.credentials.shutdownNow();
@@ -264,11 +445,16 @@ public class MainActivityTest {
         state.worker.shutdownNow(); state.credentials.shutdownNow();
     }
     @Test public void expiredFullAppLocksBrowsingButParentCanStillManageTimers() throws Exception {
-        ProofState state = fixture();
+        ProofState state = fixture(); state.recordWatched("abcdefghijk");
         state.timers.today(dev.trustedvideos.proof.core.TimerSchedule.Type.APP, 0);
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             View root = controller.get().getWindow().getDecorView();
             assertNotNull(findText(root, "App time is up for today"));
+            assertNull(findText(root, "Build a tiny rocket"));
+            root.findViewWithTag(MainActivity.Tab.LIBRARY).performClick();
+            assertTrue(root.findViewWithTag(MainActivity.Tab.LIBRARY).isSelected());
+            assertNotNull(findText(root, "App time is up for today"));
+            assertNull(root.findViewWithTag(MainActivity.LibrarySection.HISTORY));
             assertNull(findText(root, "Build a tiny rocket"));
             unlockParent(root, state);
             findText(root, "Manage timers").performClick();
@@ -424,6 +610,12 @@ public class MainActivityTest {
                 View found = findDescription(group.getChildAt(i), description); if (found != null) return found;
             }
         return null;
+    }
+    private static void collectVideoTitles(View root, List<String> titles) {
+        if (root instanceof TextView text && (text.getText().toString().equals("Build a tiny rocket")
+                || text.getText().toString().equals("Explore a clever machine"))) titles.add(text.getText().toString());
+        if (root instanceof ViewGroup group)
+            for (int i = 0; i < group.getChildCount(); i++) collectVideoTitles(group.getChildAt(i), titles);
     }
     private static TextView findText(View root, String value) {
         if (root instanceof TextView text && text.getText().toString().equals(value)) return text;

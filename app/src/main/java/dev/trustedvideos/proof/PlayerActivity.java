@@ -44,7 +44,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     private TextView message;
     private VideoEntry selected;
     private Future<?> pending;
-    private boolean active, loading;
+    private boolean active, loading, historyRecorded;
     private long request;
     private String kind = "";
     private String requestedAudio, selectedAudio = "";
@@ -86,6 +86,12 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             @Override public void onIsPlayingChanged(boolean playing) {
                 state.updateUsage(active, playing);
                 if (!playing) saveProgress();
+                MediaItem current = player.getCurrentMediaItem();
+                if (playing && active && !historyRecorded && selected != null && current != null
+                        && selected.id.equals(current.mediaId) && state.pinSet() && !state.expired()
+                        && state.policy.allows(selected.id, selected.channelId)) {
+                    state.recordWatched(selected.id); historyRecorded = true;
+                }
                 if (controls != null) controls.setPlaying(player.getPlayWhenReady() && player.getPlaybackState() != Player.STATE_ENDED);
             }
             @Override public void onPlaybackStateChanged(int playbackState) {
@@ -131,12 +137,16 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         setContentView(root);
         selected = state.find(saved == null ? getIntent().getStringExtra("videoId") : saved.getString("videoId"));
         resumeAt = state.resumePosition(selected);
-        if (saved != null) resumePlaying = false;
+        if (saved != null) {
+            resumePlaying = false;
+            historyRecorded = saved.getBoolean("historyRecorded", false);
+        }
         updateControls(); refreshRail();
     }
     @Override protected void onSaveInstanceState(Bundle saved) {
         saveProgress();
         if (selected != null) saved.putString("videoId", selected.id);
+        saved.putBoolean("historyRecorded", historyRecorded);
         super.onSaveInstanceState(saved);
     }
     @Override protected void onResume() {
@@ -239,6 +249,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         controls.show(); return super.onKeyDown(key, event);
     }
     private void play(VideoEntry entry) {
+        historyRecorded = false;
         startPlayback(entry, null, state.resumePosition(entry), true);
     }
     private void retry() { if (selected != null) startPlayback(selected, requestedAudio, resumeAt, resumePlaying); }
@@ -271,7 +282,8 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         final PlaybackGate.Ticket ticket;
         try { ticket = gate.begin(entry, !state.expired()); }
         catch (SecurityException error) { deny(error.getMessage()); return; }
-        selected = entry; updateControls(); refreshRail(); controls.show(); loading = true; kind = ""; final long serial = ++request;
+        selected = entry;
+        updateControls(); refreshRail(); controls.show(); loading = true; kind = ""; final long serial = ++request;
         message.setText("Loading " + entry.title + "…"); messagePanel.setVisibility(View.VISIBLE);
         pending = state.worker.submit(() -> {
             try {
@@ -283,9 +295,9 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
                         deny("Approval changed while loading. Choose an approved video again."); return;
                     }
                     try {
-                        MediaSource video = mediaSource(resolved.video);
+                        MediaSource video = mediaSource(resolved.video, entry.id);
                         MediaSource source = resolved.audio == null ? video
-                                : new MergingMediaSource(true, true, video, mediaSource(resolved.audio));
+                                : new MergingMediaSource(true, true, video, mediaSource(resolved.audio, entry.id));
                         player.setMediaSource(source, Math.max(0, position)); player.prepare(); player.setPlayWhenReady(shouldPlay);
                         audioOptions = resolved.audioOptions; selectedAudio = resolved.selectedAudio;
                         kind = resolved.kind; loading = false; messagePanel.setVisibility(View.GONE);
@@ -302,8 +314,8 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             }
         });
     }
-    private MediaSource mediaSource(ResolvedPlayback.Track track) {
-        MediaItem.Builder item = new MediaItem.Builder();
+    private MediaSource mediaSource(ResolvedPlayback.Track track, String videoId) {
+        MediaItem.Builder item = new MediaItem.Builder().setMediaId(videoId);
         if (track.dashManifest == null) item.setUri(track.url);
         else item.setUri("data:application/dash+xml;base64,"
                 + Base64.encodeToString(track.dashManifest.getBytes(StandardCharsets.UTF_8), Base64.NO_WRAP))

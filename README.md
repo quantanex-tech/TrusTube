@@ -38,8 +38,10 @@ uninstalling first would remove app data.
 - Parent PIN setup and settings that relock on leaving or backgrounding.
 - Parent-only channel discovery and explicit approval of a selected result.
 - Parent-controlled channel file export/import for transferring subscriptions between devices.
-- Home, Favorites, Search, Channels and Parent tabs.
+- Home, Library, Search, Channels and Parent tabs.
 - Persistent favourites and child search within approved subscriptions.
+- Library includes Favorites and History, with the last 50 distinct watched videos
+  stored on this device, newest first. Parents can clear history in settings.
 - Resume unfinished videos, with purple progress bars on thumbnails.
 - Upload-date ordering and additional channel/video pages.
 - Native landscape playback, remaining video time and a subscribed-video rail.

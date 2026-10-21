@@ -28,7 +28,8 @@ import java.util.Locale;
 import java.util.Map;
 
 public final class MainActivity extends androidx.appcompat.app.AppCompatActivity {
-    enum Tab { HOME, FAVORITES, SEARCH, CHANNELS, PARENT }
+    enum Tab { HOME, LIBRARY, SEARCH, CHANNELS, PARENT }
+    enum LibrarySection { FAVORITES, HISTORY }
     private ProofState state;
     private LinearLayout cards, content, navigation;
     private ScrollView scroll;
@@ -39,6 +40,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     private final Handler handler = new Handler(Looper.getMainLooper());
     private boolean active, parentUnlocked;
     private Tab tab = Tab.HOME;
+    private LibrarySection librarySection = LibrarySection.FAVORITES;
     private String selectedChannel;
     private String notice = "";
     private static final int EXPORT_CHANNELS = 101, IMPORT_CHANNELS = 102;
@@ -72,7 +74,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         navigation.setBackground(Ui.background(Color.WHITE, 20, this));
         root.addView(navigation, new LinearLayout.LayoutParams(-1, Ui.dp(this, 64)));
         addTab(Tab.HOME, "Home", R.drawable.ic_home);
-        addTab(Tab.FAVORITES, "Favorites", R.drawable.ic_favorite);
+        addTab(Tab.LIBRARY, "Library", R.drawable.ic_library);
         addTab(Tab.SEARCH, "Search", R.drawable.ic_search);
         addTab(Tab.CHANNELS, "Channels", R.drawable.ic_channels);
         addTab(Tab.PARENT, "Parent", R.drawable.ic_parent);
@@ -175,6 +177,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             cards.addView(Ui.button(this, "Ask a parent", this::parents));
             return;
         }
+        if (tab == Tab.LIBRARY) renderLibraryHeader();
         String query = search == null ? "" : search.getText().toString().trim().toLowerCase(Locale.ROOT);
         if (selectedChannel != null && !state.policy.allowsChannel(selectedChannel)) selectedChannel = null;
         if (tab == Tab.CHANNELS && selectedChannel != null) {
@@ -183,7 +186,9 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         }
         if (tab == Tab.CHANNELS && selectedChannel == null || tab == Tab.SEARCH) renderChannels(query);
         if (tab == Tab.CHANNELS && selectedChannel == null) return;
-        List<VideoEntry> entries = tab == Tab.FAVORITES ? state.favoriteEntries() : state.allowedEntries();
+        boolean history = tab == Tab.LIBRARY && librarySection == LibrarySection.HISTORY;
+        List<VideoEntry> entries = tab == Tab.LIBRARY
+                ? history ? state.historyEntries() : state.favoriteEntries() : state.allowedEntries();
         entries.removeIf(entry -> selectedChannel != null && !selectedChannel.equals(entry.channelId)
                 || !query.isEmpty() && !entry.title.toLowerCase(Locale.ROOT).contains(query)
                 && !entry.channelName.toLowerCase(Locale.ROOT).contains(query));
@@ -194,19 +199,45 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             if (i % columns == 0) { row = new LinearLayout(this); cards.addView(row); }
             VideoEntry entry = entries.get(i);
             LinearLayout card = Ui.card(this, state, entry, false, () -> play(entry));
+            if (history) card.addView(Ui.text(this, entry.channelName, 12, false));
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
             params.setMargins(Ui.dp(this, 4), 0, Ui.dp(this, 4), Ui.dp(this, 10)); row.addView(card, params);
         }
         if (row != null && entries.size() % columns != 0)
             for (int i = entries.size() % columns; i < columns; i++) row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
-        if (entries.isEmpty()) cards.addView(Ui.text(this, tab == Tab.FAVORITES
-                ? "Tap a video's star to save it here."
+        if (entries.isEmpty()) cards.addView(Ui.text(this, tab == Tab.LIBRARY
+                ? history ? "Videos you watch will appear here." : "Tap a video's star to save it here."
                 : state.policy.channels().isEmpty() ? "Ask a parent to add your first channel."
                 : state.loadingMore() ? "Loading your channels…"
                 : "No videos to show yet. Try loading more from your channels.", 17, false));
-        if (tab != Tab.FAVORITES && state.canLoadMore(selectedChannel))
+        if (tab != Tab.LIBRARY && state.canLoadMore(selectedChannel))
             cards.addView(Ui.button(this, state.loadingMore() ? "Loading…" : "Load more videos", this::loadMore));
         scroll.post(() -> { if (!isDestroyed()) scroll.scrollTo(0, scrollY); });
+    }
+    private void renderLibraryHeader() {
+        cards.addView(Ui.text(this, "Library", 24, true));
+        LinearLayout sections = new LinearLayout(this);
+        sections.setPadding(0, Ui.dp(this, 8), 0, Ui.dp(this, 12));
+        for (LibrarySection section : LibrarySection.values()) {
+            boolean selected = librarySection == section;
+            TextView button = Ui.text(this, section == LibrarySection.FAVORITES ? "Favorites" : "History", 16, true);
+            button.setGravity(Gravity.CENTER); button.setMinimumHeight(Ui.dp(this, 48));
+            button.setFocusable(true); button.setClickable(true); button.setTag(section); button.setSelected(selected);
+            button.setTextColor(selected ? Color.WHITE : Ui.INK);
+            button.setBackground(Ui.background(selected ? Ui.PURPLE : Color.WHITE, 16, this));
+            button.setOnClickListener(view -> {
+                if (librarySection == section) return;
+                librarySection = section; scroll.scrollTo(0, 0); render();
+            });
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(0, -2, 1);
+            params.setMargins(Ui.dp(this, 4), 0, Ui.dp(this, 4), 0); sections.addView(button, params);
+        }
+        cards.addView(sections);
+        if (librarySection == LibrarySection.HISTORY) {
+            TextView description = Ui.text(this, "Your last " + ProofState.WATCH_HISTORY_LIMIT
+                    + " watched videos · newest first", 13, false);
+            description.setPadding(Ui.dp(this, 4), 0, 0, Ui.dp(this, 12)); cards.addView(description);
+        }
     }
     private void renderChannels(String query) {
         LinearLayout row = null; int shown = 0;
@@ -230,7 +261,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         if (shown == 0 && tab == Tab.CHANNELS) cards.addView(Ui.text(this, "Your subscribed channels will appear here.", 17, false));
     }
     private void loadMore() {
-        if (state.appExpired() || tab == Tab.PARENT || tab == Tab.FAVORITES || state.loadingMore()
+        if (state.appExpired() || tab == Tab.PARENT || tab == Tab.LIBRARY || state.loadingMore()
                 || tab == Tab.CHANNELS && selectedChannel == null) return;
         state.loadMoreAllowed(selectedChannel, text -> {
             if (!isDestroyed()) { notice = text; render(); }
@@ -340,6 +371,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
                     this::render, () -> { closeTimers(); render(); });
             render();
         }));
+        cards.addView(Ui.button(this, "Clear watch history", this::confirmClearHistory));
         cards.addView(Ui.button(this, "Set a short test timer", this::timer));
         cards.addView(Ui.button(this, "Reset proof measurements", state::resetUsage));
         cards.addView(Ui.button(this, (state.forceSplit() ? "Disable" : "Enable") + " separate audio/video test",
@@ -386,6 +418,15 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
                         notice = "Imported " + rows.size() + " channels (" + added + " new). Loading their videos…";
                         render(); state.refreshAllowedIfNeeded();
                     } catch (IllegalArgumentException error) { Ui.error(this, error); }
+                }).show();
+    }
+    private void confirmClearHistory() {
+        final long epoch = state.parentEpoch();
+        parentDialog = new AlertDialog.Builder(this).setTitle("Clear watch history?")
+                .setMessage("Remove all recently watched videos from Library? New videos you watch will appear there again.")
+                .setNegativeButton("Cancel", null).setPositiveButton("Clear history", (dialog, which) -> {
+                    if (!active || tab != Tab.PARENT || !parentUnlocked || state.parentEpoch() != epoch) return;
+                    state.clearHistory(); notice = "Watch history cleared."; render();
                 }).show();
     }
     private void addChannel() {

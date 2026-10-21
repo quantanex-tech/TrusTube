@@ -3,7 +3,7 @@
 Install the APK from a GitHub pre-release. Setup and subscriptions live on each
 device; no YouTube sign-in is used. Choose a six-digit parent PIN and retain it
 outside the child's device. PIN recovery is absent. Clearing app data removes the
-PIN, subscriptions, blocks, favourites and measurements.
+PIN, subscriptions, blocks, favourites, watch history and measurements.
 
 Parent settings relock on leaving/backgrounding. Add a trusted channel accepts
 names, handles and channel URLs. Results are metadata only; choose Add to approve
@@ -15,6 +15,12 @@ Useful checks:
   `@checkerwelt`. Try cancel, a poor query, no results and a network error.
 - Check all five tabs, icons and thumbnails; try resized windows/mouse/keyboard.
 - Save/remove favourites, restart and check addition order/persistence.
+- Open Library and switch between Favorites and History. Play a video and return:
+  it should appear first in History. Replay an older video: it should move first
+  without duplication. Restart to check persistence; only the latest 50 distinct
+  videos are retained. A failed load should not add a history entry.
+- In unlocked Parent settings, cancel then confirm Clear watch history. Only
+  confirmation should empty History; favourites should remain.
 - Play an approved ordinary video, seek, pause and check original audio/sync.
 - With a short device screen timeout, play without touching the screen for longer
   than two timeout periods. The screen should stay awake, including while buffering.
@@ -25,7 +31,7 @@ Useful checks:
   them together; pause and check that controls/time stay still.
 - Load more listings/rail pages and check newest-upload-first ordering.
 - Cancel a block, then confirm a video/channel block. Playback should stop and
-  return Home. Retry/restart and check favourites/search/rail: blocked content must
+  return Home. Retry/restart and check favourites/history/search/rail: blocked content must
   stay unavailable. Only Parent can restore it.
 - Leave/background Parent during search/load: old results must not approve channels.
 - Try network loss, retry and short proof timers. Disable an expired test timer
