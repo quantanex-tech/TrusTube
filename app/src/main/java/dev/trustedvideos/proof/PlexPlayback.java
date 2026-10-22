@@ -53,6 +53,7 @@ final class PlexPlayback {
         Run run=new Run(s,video,grant); current=run; long ticket=++epoch;
         io.execute(()-> {
             try {
+                state.plex.revalidate(s);
                 state.plex.store.check(s,key.item());
                 PlexApi.Entry e=state.plex.api.metadata(s,key.item()); validate(run,e);
                 run.entry=e; run.guard=new ProgressGuard(e.offset(),e.views());

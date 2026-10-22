@@ -21,7 +21,7 @@ public class PlexShowTargetTest {
         state=new ProofState(context);
         state.plex.store.preferences().edit().putString("cipher","test-fixture-not-a-credential").putLong("generation",1).commit();
         ReflectionHelpers.setField(state.plex,"session",new PlexApi.Session("2","Child","ACCOUNT","server","SERVER","https://media.example",1));
-        ReflectionHelpers.setField(state.plex,"validatedAt",System.currentTimeMillis());
+        ReflectionHelpers.setField(state.plex,"validatedAt",android.os.SystemClock.elapsedRealtime());
         state.plexShow(SHOW,"Show",PlexLibrary.art(SHOW));
     }
     @After public void close() { state.worker.shutdownNow(); state.credentials.shutdownNow(); state.plexImages.close(); }

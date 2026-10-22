@@ -141,7 +141,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         render();
     }
     @Override protected void onResume() {
-        super.onResume(); active = true; state.subscribe(changed); render(); clock.run();
+        super.onResume(); active = true; state.subscribe(changed); state.plex.checkExpiry(); state.plex.refresh(false); render(); clock.run();
         LazyImages.setActive(this, true);
         // Network refresh is opt-in through real channel data, never for an empty setup.
         state.refreshAllowedIfNeeded(); state.plex.refresh(false);

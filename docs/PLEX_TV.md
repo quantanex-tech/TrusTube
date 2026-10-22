@@ -53,8 +53,9 @@ Saved child credentials are encrypted with Android Keystore. Media and artwork
 requests use the verified origin without following redirects; authenticated artwork
 is cached only in bounded private memory. Disconnecting invalidates pending work
 and clears protected artwork. Playback checks child metadata approximately every ten
-seconds; browsing refreshes approximately every thirty seconds. Unverifiable access
-stops playback and hides Plex, with Parent retry/reconnect. Network request timeouts,
+seconds; browsing refreshes approximately every thirty seconds. Returning after idle
+automatically rechecks the saved child before restoring Plex access. Unverifiable
+access stops playback and hides Plex, with Parent retry/reconnect. Network request timeouts,
 in-flight requests and already-buffered frames mean external revocation is not
 instantaneous. Local blocks and connection changes are checked on each media read.
 

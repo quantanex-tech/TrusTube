@@ -63,7 +63,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             state.updateUsage(true, player.isPlaying());
             if (android.os.SystemClock.elapsedRealtime() - lastProgressSave >= WatchProgress.SAVE_INTERVAL_MS)
                 saveProgress();
-            if(selected!=null && selected.isPlex()) state.plex.checkExpiry();
+            if(selected!=null && selected.isPlex() && player.getMediaItemCount()>0) state.plex.checkExpiry();
             plexPlayback.tick();
             updateControls();
             if (state.expired()) deny("Viewing time is up. Ask a parent for help.");

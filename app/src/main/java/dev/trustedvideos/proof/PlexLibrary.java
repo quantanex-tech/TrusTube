@@ -45,7 +45,7 @@ final class PlexLibrary {
         store.access((s,id)-> {
             VideoEntry entry=state.find(key(s,"episode",id));
             if(entry==null || session==null || s.generation()!=session.generation() || !state.policy.allows(entry.id,entry.channelId)
-                    || System.currentTimeMillis()-validatedAt>VALID_MS*2) throw new IOException("Plex access needs a fresh check.");
+                    || android.os.SystemClock.elapsedRealtime()-validatedAt>VALID_MS*2) throw new IOException("Plex access needs a fresh check.");
         });
     }
     static String key(PlexApi.Session s,String type,String id) { return MediaKey.key(s.childId(),s.serverId(),type,id); }
@@ -56,7 +56,7 @@ final class PlexLibrary {
     synchronized Map<String,PlexApi.Entry> shows() { return new LinkedHashMap<>(shows); }
     synchronized PlexApi.Entry show(String key) { return shows.get(key); }
     synchronized boolean allowed(VideoEntry e) {
-        return session!=null && episodes.containsKey(e.id) && System.currentTimeMillis()-validatedAt<=VALID_MS*2;
+        return session!=null && episodes.containsKey(e.id) && android.os.SystemClock.elapsedRealtime()-validatedAt<=VALID_MS*2;
     }
     synchronized List<VideoEntry> rail(String showKey) {
         List<VideoEntry> rows=new ArrayList<>();
@@ -67,11 +67,11 @@ final class PlexLibrary {
         return rows;
     }
     void checkExpiry() {
-        if(session!=null && System.currentTimeMillis()-validatedAt>VALID_MS*2) fail("Plex verification expired. Retry in Parent.");
+        if(session!=null && android.os.SystemClock.elapsedRealtime()-validatedAt>VALID_MS*2) suspend("Checking the saved Plex connection…",false);
     }
     void refresh(boolean force) {
         synchronized(this) {
-            if(!store.configured() || loading || !force && requiresParent || !force && session!=null && System.currentTimeMillis()-validatedAt<VALID_MS) return;
+            if(!store.configured() || loading || !force && requiresParent || !force && session!=null && android.os.SystemClock.elapsedRealtime()-validatedAt<VALID_MS) return;
             loading=true;
         }
         final long run=epoch;
@@ -112,7 +112,7 @@ final class PlexLibrary {
                         state.clearPlexGrants(); shows.clear(); episodes.clear(); targets.clear(); targetLoads.clear(); pages.clear(); railPages.clear(); railLoads.clear(); seasons.clear();
                         session=ready; libraries.clear(); libraries.addAll(ls); libraryIndex=cursorIndex; showOffset=cursorOffset;
                         loadedCounts.clear(); loadedCounts.putAll(freshCounts);
-                        validatedAt=System.currentTimeMillis(); more=remaining; loading=false; requiresParent=false;
+                        validatedAt=android.os.SystemClock.elapsedRealtime(); more=remaining; loading=false; requiresParent=false;
                         status="Connected to Plex · "+ready.childName(); acceptShows(ready,discovered);
                         for(PlexApi.Entry e:saved) if(e.type().equals("episode") && shows.containsKey(key(ready,"show",e.showId()))) {
                             try { acceptEpisodes(ready,List.of(e),key(ready,"show",e.showId())); } catch(IOException ignored) { }
@@ -129,14 +129,23 @@ final class PlexLibrary {
         state.clearPlexGrants(); state.plexImages.clear(); refresh(true);
     }
     synchronized void disconnect() { store.disconnect(); fail("Plex is not connected"); }
-    synchronized void fail(String message) {
-        epoch++; session=null; validatedAt=0; loading=false; more=false; requiresParent=true; status=message;
+    synchronized void fail(String message) { suspend(message,true); }
+    private synchronized void suspend(String message,boolean parentRequired) {
+        epoch++; session=null; validatedAt=0; loading=false; more=false; requiresParent=parentRequired; status=message;
         shows.clear(); episodes.clear(); targets.clear(); seasons.clear(); pages.clear(); railPages.clear(); railLoads.clear(); targetLoads.clear();
         state.clearPlexGrants(); state.plexChanged();
     }
+    void revalidate(PlexApi.Session s) throws Exception {
+        store.checkConnection(s);
+        if(android.os.SystemClock.elapsedRealtime()-validatedAt<VALID_MS) return;
+        api.verifyChild(new PlexApi.Child(s.childId(),s.childName(),s.childAccountToken()));
+        api.connect(new PlexApi.Child(s.childId(),s.childName(),s.childAccountToken()),
+                new PlexApi.Server(s.serverId(),"",s.serverToken(),List.of()),s.origin(),s.generation());
+        verified(s);
+    }
     synchronized void verified(PlexApi.Session s) throws IOException {
         if(session==null || s.generation()!=session.generation()) throw new IOException("Plex connection changed.");
-        validatedAt=System.currentTimeMillis();
+        validatedAt=android.os.SystemClock.elapsedRealtime();
     }
     private void acceptShows(PlexApi.Session s,List<PlexApi.Entry> entries) {
         for(PlexApi.Entry e:entries) if(e.type().equals("show")) {
