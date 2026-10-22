@@ -8,14 +8,17 @@ public final class PermissionPolicy {
     private final Set<String> channels = new HashSet<>();
     private final Set<String> blockedChannels = new HashSet<>();
     private final Set<String> blockedVideos = new HashSet<>();
+    private final Set<String> plexEpisodes = new HashSet<>();
     private long revision;
 
     public synchronized void restore(Set<String> allowed, Set<String> videos, Set<String> blocked) {
-        channels.clear(); channels.addAll(allowed);
+        channels.clear(); channels.addAll(allowed); plexEpisodes.clear();
         blockedVideos.clear(); blockedVideos.addAll(videos);
         blockedChannels.clear(); blockedChannels.addAll(blocked);
         revision++;
     }
+    public synchronized void verifyEpisode(String key) { if(MediaKey.playable(key)) plexEpisodes.add(key); }
+    public synchronized void clearPlex() { channels.removeIf(k -> MediaKey.plex(k)!=null); plexEpisodes.clear(); revision++; }
     public synchronized void approve(String channel) { channels.add(channel); revision++; }
     public synchronized void remove(String channel) { channels.remove(channel); revision++; }
     public synchronized void blockVideo(String video) { blockedVideos.add(video); revision++; }
@@ -24,11 +27,11 @@ public final class PermissionPolicy {
     public synchronized void restoreChannel(String channel) { blockedChannels.remove(channel); revision++; }
     public synchronized long revision() { return revision; }
     public synchronized boolean allows(String video, String channel) {
-        return validVideoId(video) && validChannelId(channel) && channels.contains(channel)
+        return (validVideoId(video) && validChannelId(channel) || MediaKey.pair(video,channel) && plexEpisodes.contains(video)) && channels.contains(channel)
                 && !blockedChannels.contains(channel) && !blockedVideos.contains(video);
     }
     public synchronized boolean allowsChannel(String channel) {
-        return validChannelId(channel) && channels.contains(channel) && !blockedChannels.contains(channel);
+        return (validChannelId(channel) || MediaKey.plex(channel)!=null && MediaKey.plex(channel).type().equals("show")) && channels.contains(channel) && !blockedChannels.contains(channel);
     }
     public synchronized Set<String> channels() { return new HashSet<>(channels); }
     public synchronized Set<String> blockedVideos() { return new HashSet<>(blockedVideos); }

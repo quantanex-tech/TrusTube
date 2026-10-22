@@ -7,6 +7,8 @@ import android.os.Handler;
 import android.os.Looper;
 import android.os.SystemClock;
 import dev.trustedvideos.proof.core.PermissionPolicy;
+import dev.trustedvideos.proof.core.MediaKey;
+import dev.trustedvideos.proof.core.DailyMix;
 import dev.trustedvideos.proof.core.ChannelTransfer;
 import dev.trustedvideos.proof.core.PinHash;
 import dev.trustedvideos.proof.core.UsageMeter;
@@ -26,6 +28,9 @@ import org.json.JSONObject;
 
 public final class ProofState {
     public static final int WATCH_HISTORY_LIMIT = 50;
+    final PlexLibrary plex;
+    final ImageCache plexImages;
+    private final DailyMix dailyMix;
     public final PermissionPolicy policy = new PermissionPolicy();
     public final UsageMeter meter;
     public final DailyTimers timers;
@@ -57,6 +62,7 @@ public final class ProofState {
         progress = new WatchProgress(context.getSharedPreferences("watch-progress", Context.MODE_PRIVATE));
         policy.restore(prefs.getStringSet("channels", Set.of()), prefs.getStringSet("blockedVideos", Set.of()),
                 prefs.getStringSet("blockedChannels", Set.of()));
+        policy.clearPlex(); // Saved metadata never grants Plex access after restart.
         meter = new UsageMeter(prefs.getLong("foregroundMs", 0), prefs.getLong("playingMs", 0));
         timers = new DailyTimers(prefs, this::changed);
         try {
@@ -79,14 +85,23 @@ public final class ProofState {
             JSONArray history = new JSONArray(prefs.getString("watchHistory", "[]"));
             for (int i = 0; i < history.length() && watchHistory.size() < WATCH_HISTORY_LIMIT; i++) {
                 Object item = history.opt(i);
-                if (item instanceof String && PermissionPolicy.validVideoId((String) item)
+                if (item instanceof String && MediaKey.playable((String) item)
                         && !watchHistory.contains((String) item)) watchHistory.add((String) item);
             }
         } catch (Exception ignored) { watchHistory.clear(); }
+            List<String> mixOrder = new ArrayList<>();
+        try { JSONArray a=new JSONArray(prefs.getString("homeMixOrder","[]")); for(int i=0;i<a.length();i++) mixOrder.add(a.getString(i)); } catch(Exception ignored) { }
+        dailyMix=new DailyMix(prefs.getString("homeMixDay",""),prefs.getLong("homeMixSeed",0),mixOrder);
+        plex=new PlexLibrary(context,this);
+        plexImages=PlexArtwork.cache(context,this);
     }
     public synchronized VideoEntry find(String id) { return catalog.get(id); }
     WatchProgress.Entry progress(VideoEntry entry) {
-        return entry != null && policy.allows(entry.id, entry.channelId) ? progress.get(entry.id) : null;
+        if(entry==null || !policy.allows(entry.id,entry.channelId)) return null;
+        if(entry.isPlex()) {
+            var e=plex.episode(entry.id); return e!=null && e.offset()>0 && e.duration()>e.offset()?new WatchProgress.Entry(e.offset(),e.duration()):null;
+        }
+        return progress.get(entry.id);
     }
     long resumePosition(VideoEntry entry) {
         WatchProgress.Entry saved = progress(entry);
@@ -143,7 +158,7 @@ public final class ProofState {
     public synchronized String avatar(String id) { return channelAvatars.getOrDefault(id, ""); }
     public synchronized String exportChannels() {
         List<ChannelTransfer.Channel> rows = new ArrayList<>();
-        for (String id : policy.channels()) rows.add(new ChannelTransfer.Channel(id, label(id), policy.blockedChannels().contains(id)));
+        for (String id : policy.channels()) if(PermissionPolicy.validChannelId(id)) rows.add(new ChannelTransfer.Channel(id, label(id), policy.blockedChannels().contains(id)));
         return ChannelTransfer.encode(rows);
     }
     public synchronized int importChannels(List<ChannelTransfer.Channel> rows) {
@@ -178,7 +193,7 @@ public final class ProofState {
     /** Refresh every subscription on upgrade/after six hours so old undated caches can interleave. */
     public void refreshAllowedIfNeeded() {
         if (loadingMore || appExpired() || System.currentTimeMillis() - prefs.getLong("datedCatalogRefresh", 0) < 6 * 3600000L) return;
-        List<String> ids = new ArrayList<>(policy.channels()); ids.removeIf(id -> !policy.allowsChannel(id));
+        List<String> ids = new ArrayList<>(policy.channels()); ids.removeIf(id -> !PermissionPolicy.validChannelId(id) || !policy.allowsChannel(id));
         if (ids.isEmpty()) return;
         loadingMore = true; final long revision = policy.revision();
         changed();
@@ -202,7 +217,7 @@ public final class ProofState {
     }
     public boolean canLoadMore(String onlyChannel) {
         for (String id : policy.channels())
-            if (policy.allowsChannel(id) && (onlyChannel == null || onlyChannel.equals(id)) && sources.hasMore(id)) return true;
+            if (PermissionPolicy.validChannelId(id) && policy.allowsChannel(id) && (onlyChannel == null || onlyChannel.equals(id)) && sources.hasMore(id)) return true;
         return false;
     }
     public synchronized boolean acceptAllowedBatch(SourceRepository.ChannelBatch batch, long revision) {
@@ -212,7 +227,7 @@ public final class ProofState {
     public void loadMoreAllowed(String onlyChannel, java.util.function.Consumer<String> done) {
         if (loadingMore || !canLoadMore(onlyChannel)) return;
         List<String> ids = new ArrayList<>(policy.channels());
-        ids.removeIf(id -> !policy.allowsChannel(id) || onlyChannel != null && !onlyChannel.equals(id));
+        ids.removeIf(id -> !PermissionPolicy.validChannelId(id) || !policy.allowsChannel(id) || onlyChannel != null && !onlyChannel.equals(id));
         if (ids.isEmpty()) return;
         loadingMore = true;
         changed();
@@ -251,13 +266,36 @@ public final class ProofState {
                 entries.put(item);
             } catch (Exception ignored) {}
         }
-        prefs.edit().putStringSet("channels", policy.channels())
+        prefs.edit().putInt("catalogVersion", 2).putStringSet("channels", policy.channels())
                 .putStringSet("blockedVideos", policy.blockedVideos())
                 .putStringSet("blockedChannels", policy.blockedChannels())
                 .putString("catalog", entries.toString()).putString("channelNames", new JSONObject(channelNames).toString())
                 .putString("channelAvatars", new JSONObject(channelAvatars).toString())
                 .apply();
     }
+    synchronized void plexShow(String id,String title,String art) {
+        channelNames.put(id,title); channelAvatars.put(id,art); policy.approve(id);
+    }
+    synchronized void plexEpisode(VideoEntry entry) {
+        catalog.put(entry.id,entry); policy.verifyEpisode(entry.id); saveCatalog();
+    }
+    void clearPlexGrants() { policy.clearPlex(); }
+    void plexChanged() { if(plex.session()==null) plexImages.clear(); changed(); }
+    synchronized List<String> homeMix(boolean reshuffle) {
+        List<String> yt=new ArrayList<>(),tv=new ArrayList<>();
+        for(VideoEntry e:allowedEntries()) if(!e.isPlex()) yt.add(e.id);
+        for(String key:channelNames.keySet()) if(MediaKey.plex(key)!=null && policy.allowsChannel(key)) tv.add(key);
+        List<String> order=dailyMix.update(java.time.LocalDate.now().toString(),java.util.concurrent.ThreadLocalRandom.current().nextLong(),yt,tv,reshuffle);
+        prefs.edit().putString("homeMixDay",dailyMix.day()).putLong("homeMixSeed",dailyMix.seed()).putString("homeMixOrder",new JSONArray(dailyMix.savedOrder()).toString()).apply();
+        return order;
+    }
+    synchronized List<VideoEntry> savedPlexEntries() {
+        java.util.LinkedHashSet<String> ids=new java.util.LinkedHashSet<>(watchHistory); ids.addAll(favorites.keySet());
+        List<VideoEntry> rows=new ArrayList<>();
+        for(String id:ids) { VideoEntry e=catalog.get(id); if(e!=null && e.isPlex()) rows.add(e); }
+        return rows;
+    }
+    void reshuffle() { homeMix(true); changed(); }
     public void subscribe(Runnable listener) { listeners.add(listener); }
     public void unsubscribe(Runnable listener) { listeners.remove(listener); }
     private void changed() { main.post(() -> listeners.forEach(Runnable::run)); }

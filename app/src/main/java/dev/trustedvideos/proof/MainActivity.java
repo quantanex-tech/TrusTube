@@ -20,6 +20,8 @@ import android.widget.ImageView;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import dev.trustedvideos.proof.core.VideoEntry;
+import dev.trustedvideos.proof.core.MediaKey;
+import dev.trustedvideos.proof.plex.PlexApi;
 import dev.trustedvideos.proof.core.ChannelTransfer;
 import dev.trustedvideos.proof.source.SourceRepository;
 import java.util.ArrayList;
@@ -41,7 +43,9 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     private boolean active, parentUnlocked;
     private Tab tab = Tab.HOME;
     private LibrarySection librarySection = LibrarySection.FAVORITES;
-    private String selectedChannel;
+    private String selectedChannel, selectedSeason, browsing;
+    private PlexParent plexParent;
+    private String localDay=java.time.LocalDate.now().toString();
     private String notice = "";
     private static final int EXPORT_CHANNELS = 101, IMPORT_CHANNELS = 102;
     private String pendingExport;
@@ -53,7 +57,10 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         @Override public void run() {
             if (!active) return;
             state.updateUsage(true, false);
+            state.plex.checkExpiry(); if(!state.appExpired()) state.plex.refresh(false);
             if (measurements != null) measurements.setText(state.measurements());
+            String today=java.time.LocalDate.now().toString();
+            if(!today.equals(localDay)) { localDay=today; render(); }
             handler.postDelayed(this, 1000);
         }
     };
@@ -97,10 +104,10 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     }
     private void selectTab(Tab next) {
         if (next == tab) return;
-        state.invalidateParentActions(); parentUnlocked = false;
+        state.invalidateParentActions(); parentUnlocked = false; closePlexParent();
         closeTimers();
         if (parentDialog != null) parentDialog.dismiss();
-        tab = next; selectedChannel = null; notice = ""; buildPage();
+        tab = next; selectedChannel = null; selectedSeason=null; browsing=null; notice = ""; buildPage();
         if (tab == Tab.PARENT) unlockParents();
     }
     private void buildPage() {
@@ -137,12 +144,12 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         super.onResume(); active = true; state.subscribe(changed); render(); clock.run();
         LazyImages.setActive(this, true);
         // Network refresh is opt-in through real channel data, never for an empty setup.
-        state.refreshAllowedIfNeeded();
+        state.refreshAllowedIfNeeded(); state.plex.refresh(false);
     }
     @Override protected void onPause() {
         LazyImages.setActive(this, false);
         active = false; handler.removeCallbacks(clock); state.updateUsage(false, false);
-        state.unsubscribe(changed); state.invalidateParentActions(); parentUnlocked = false;
+        state.unsubscribe(changed); state.invalidateParentActions(); parentUnlocked = false; closePlexParent();
         if (parentDialog != null) parentDialog.dismiss();
         closeTimers();
         super.onPause();
@@ -153,7 +160,8 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             if (!timers.back()) closeTimers();
             render(); return true;
         }
-        if (selectedChannel != null) { selectedChannel = null; buildPage(); return true; }
+        if(selectedSeason!=null) { selectedSeason=null; browsing=null; render(); return true; }
+        if (selectedChannel != null) { selectedChannel = null; browsing=null; buildPage(); return true; }
         if (tab != Tab.HOME) { selectTab(Tab.HOME); return true; }
         return false;
     }
@@ -176,6 +184,10 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             cards.addView(Ui.text(this, "Ask a parent to review your limits. Your weekly schedule starts again tomorrow.", 17, false));
             cards.addView(Ui.button(this, "Ask a parent", this::parents));
             return;
+        }
+        if(tab==Tab.HOME) { renderHome(); restoreScroll(scrollY); return; }
+        if(tab==Tab.CHANNELS && MediaKey.plex(selectedChannel)!=null && state.policy.allowsChannel(selectedChannel)) {
+            renderShow(); restoreScroll(scrollY); return;
         }
         if (tab == Tab.LIBRARY) renderLibraryHeader();
         String query = search == null ? "" : search.getText().toString().trim().toLowerCase(Locale.ROOT);
@@ -214,6 +226,66 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             cards.addView(Ui.button(this, state.loadingMore() ? "Loading…" : "Load more videos", this::loadMore));
         scroll.post(() -> { if (!isDestroyed()) scroll.scrollTo(0, scrollY); });
     }
+    private void restoreScroll(int y) { scroll.post(()->{ if(!isDestroyed()) scroll.scrollTo(0,y); }); }
+    private void renderHome() {
+        cards.addView(Ui.text(this,"Today's mix",24,true));
+        cards.addView(Ui.button(this,"Reshuffle",()->{ state.reshuffle(); scroll.scrollTo(0,0); }));
+        if(state.plex.loading()) { cards.addView(Ui.text(this,"Loading Plex TV…",14,false)); }
+        List<String> entries=state.homeMix(false);
+        int width=cards.getWidth()>0?cards.getWidth():getResources().getDisplayMetrics().widthPixels;
+        int columns=Math.max(1,Math.min(3,width/Ui.dp(this,320))); LinearLayout row=null; int shown=0;
+        for(String id:entries) {
+            View card;
+            if(MediaKey.plex(id)!=null) {
+                card=PlexShowCard.create(this,state,id,this::play,()->openShow(id));
+            } else {
+                VideoEntry e=state.find(id); if(e==null) continue;
+                card=Ui.card(this,state,e,false,()->play(e));
+            }
+            if(shown%columns==0) { row=new LinearLayout(this); cards.addView(row); }
+            LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1); p.setMargins(Ui.dp(this,4),0,Ui.dp(this,4),Ui.dp(this,10));
+            row.addView(card,p); shown++;
+        }
+        if(row!=null && shown%columns!=0) for(int i=shown%columns;i<columns;i++) row.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
+        if(entries.isEmpty()) cards.addView(Ui.text(this,"Ask a parent to add YouTube channels or connect Plex TV.",17,false));
+        if(state.canLoadMore(null) || state.plex.hasMore()) cards.addView(Ui.button(this,"Load more",this::loadMore));
+    }
+    private void openShow(String id) { tab=Tab.CHANNELS; selectedChannel=id; selectedSeason=null; browsing=null; buildPage(); }
+    private void renderShow() {
+        String show=selectedChannel;
+        cards.addView(Ui.button(this,"← Channels",()->{selectedChannel=null; selectedSeason=null; browsing=null; buildPage();}));
+        cards.addView(PlexShowCard.create(this,state,show,this::play,()->{ if(selectedSeason!=null) { selectedSeason=null; render(); } }));
+        List<PlexApi.Entry> seasons=state.plex.seasons(show);
+        if(seasons==null) {
+            cards.addView(Ui.text(this,"Loading seasons…",15,false));
+            if(!show.equals(browsing)) { browsing=show; state.plex.browse(show,null,false,e->{browsing=null; notice=e; if(active&&!isDestroyed()) render();}); }
+            return;
+        }
+        if(selectedSeason==null) {
+            for(PlexApi.Entry season:seasons) if(season.type().equals("season")) cards.addView(Ui.button(this,season.title(),()-> {
+                selectedSeason=season.id(); browsing=null; render();
+            }));
+        } else {
+            cards.addView(Ui.button(this,"← Seasons",()->{selectedSeason=null; browsing=null; render();}));
+            PlexApi.Page page=state.plex.episodes(selectedSeason);
+            if(page==null) { cards.addView(Ui.text(this,"Loading episodes…",15,false)); loadPlexEpisodes(false); return; }
+            for(PlexApi.Entry e:page.items()) {
+                VideoEntry v=state.find(PlexLibrary.key(state.plex.session(),"episode",e.id()));
+                if(v!=null && state.policy.allows(v.id,v.channelId)) cards.addView(Ui.card(this,state,v,false,()->play(v)));
+            }
+            if(page.more()) cards.addView(Ui.button(this,"Load more episodes",()->loadPlexEpisodes(true)));
+        }
+    }
+    private void loadPlexEpisodes(boolean more) {
+        if(selectedSeason==null || selectedSeason.equals(browsing) || state.appExpired()) return;
+        String season=selectedSeason; browsing=season;
+        state.plex.browse(selectedChannel,season,more,e->{browsing=null; notice=e; if(active&&!isDestroyed()) render();});
+    }
+    private void closePlexParent() { if(plexParent!=null) { plexParent.close(); plexParent=null; } }
+    private void connectPlex() {
+        if(!authorizedParent()) return; closePlexParent(); final long epoch=state.parentEpoch();
+        plexParent=new PlexParent(this,state,()->authorizedParent() && epoch==state.parentEpoch()); plexParent.connect();
+    }
     private void renderLibraryHeader() {
         cards.addView(Ui.text(this, "Library", 24, true));
         LinearLayout sections = new LinearLayout(this);
@@ -241,7 +313,9 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     }
     private void renderChannels(String query) {
         LinearLayout row = null; int shown = 0;
-        for (Map.Entry<String, String> channel : state.channels().entrySet()) {
+        List<Map.Entry<String,String>> sorted=new ArrayList<>(state.channels().entrySet());
+        sorted.sort(java.util.Comparator.comparing((Map.Entry<String,String> e)->e.getValue(),String.CASE_INSENSITIVE_ORDER).thenComparing(Map.Entry::getKey));
+        for (Map.Entry<String, String> channel : sorted) {
             if (!state.policy.allowsChannel(channel.getKey()) || !query.isEmpty()
                     && !channel.getValue().toLowerCase(Locale.ROOT).contains(query)) continue;
             if (shown % 2 == 0) { row = new LinearLayout(this); cards.addView(row); }
@@ -254,13 +328,20 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             Ui.image(this, state, avatar, state.avatar(channel.getKey()));
             TextView name = Ui.text(this, channel.getValue(), 14, false); name.setMaxLines(2);
             name.setEllipsize(TextUtils.TruncateAt.END); name.setGravity(Gravity.CENTER); tile.addView(name);
-            tile.setOnClickListener(view -> { tab = Tab.CHANNELS; selectedChannel = channel.getKey(); buildPage(); });
+            if(MediaKey.plex(channel.getKey())!=null) {
+                TextView label=Ui.text(this,"TV",11,true); label.setGravity(Gravity.CENTER); tile.addView(label);
+            }
+            tile.setOnClickListener(view -> { tab = Tab.CHANNELS; selectedChannel = channel.getKey(); selectedSeason=null; browsing=null; buildPage(); });
             row.addView(tile, new LinearLayout.LayoutParams(0, -2, 1)); shown++;
         }
         if (shown % 2 != 0) row.addView(new View(this), new LinearLayout.LayoutParams(0, 1, 1));
         if (shown == 0 && tab == Tab.CHANNELS) cards.addView(Ui.text(this, "Your subscribed channels will appear here.", 17, false));
     }
     private void loadMore() {
+        if(state.appExpired()) return;
+        if(tab==Tab.CHANNELS && selectedChannel==null) { state.plex.loadMore(); return; }
+        if(MediaKey.plex(selectedChannel)!=null) { loadPlexEpisodes(true); return; }
+        if(tab==Tab.HOME) state.plex.loadMore();
         if (state.appExpired() || tab == Tab.PARENT || tab == Tab.LIBRARY || state.loadingMore()
                 || tab == Tab.CHANNELS && selectedChannel == null) return;
         state.loadMoreAllowed(selectedChannel, text -> {
@@ -357,9 +438,18 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
             return;
         }
         cards.addView(Ui.text(this, "Settings lock as soon as you leave this tab.", 14, false));
+        cards.addView(Ui.text(this,state.plex.status(),15,false));
+        cards.addView(Ui.button(this,"Connect / change Plex TV",this::connectPlex));
+        cards.addView(Ui.button(this,"Retry / refresh Plex TV",()->state.plex.refresh(true)));
+        cards.addView(Ui.button(this,"Disconnect Plex TV",()-> {
+            final long epoch=state.parentEpoch();
+            parentDialog=new AlertDialog.Builder(this).setTitle("Disconnect Plex TV?")
+                    .setMessage("Remove the saved Plex connection from this device?").setNegativeButton("Cancel",null)
+                    .setPositiveButton("Disconnect",(d,w)->{ if(authorizedParent() && epoch==state.parentEpoch()) state.plex.disconnect(); }).show();
+        }));
         cards.addView(Ui.button(this, "Add a trusted channel", this::addChannel));
-        cards.addView(Ui.button(this, "Export subscribed channels", this::exportChannels));
-        cards.addView(Ui.button(this, "Import subscribed channels", this::pickChannelImport));
+        cards.addView(Ui.button(this, "Export YouTube channels", this::exportChannels));
+        cards.addView(Ui.button(this, "Import YouTube channels", this::pickChannelImport));
         if (pendingImport != null) cards.addView(Ui.button(this, "Review channel import (" + pendingImport.size() + ")", this::confirmChannelImport));
         cards.addView(Ui.button(this, "Refresh / load another page", () -> chooseChannel(false)));
         cards.addView(Ui.button(this, "Remove a channel", () -> chooseChannel(true)));
@@ -465,6 +555,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
     }
     private void chooseChannel(boolean remove) {
         List<String> ids = new ArrayList<>(state.policy.channels());
+        ids.removeIf(id->!dev.trustedvideos.proof.core.PermissionPolicy.validChannelId(id));
         if (ids.isEmpty()) { notice = "Add a channel first."; render(); return; }
         String[] names = ids.stream().map(state::label).toArray(String[]::new);
         parentDialog = new AlertDialog.Builder(this).setTitle(remove ? "Remove a channel" : "Refresh a channel")

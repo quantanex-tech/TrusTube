@@ -35,6 +35,7 @@ import java.util.concurrent.Future;
 @androidx.annotation.OptIn(markerClass = androidx.media3.common.util.UnstableApi.class)
 public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivity {
     private ProofState state;
+    private PlexPlayback plexPlayback;
     private PlaybackGate gate;
     private ExoPlayer player;
     private PlayerView playerView;
@@ -62,6 +63,8 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             state.updateUsage(true, player.isPlaying());
             if (android.os.SystemClock.elapsedRealtime() - lastProgressSave >= WatchProgress.SAVE_INTERVAL_MS)
                 saveProgress();
+            if(selected!=null && selected.isPlex()) state.plex.checkExpiry();
+            plexPlayback.tick();
             updateControls();
             if (state.expired()) deny("Viewing time is up. Ask a parent for help.");
             handler.postDelayed(this, 1000);
@@ -85,6 +88,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             @Override public void onEvents(Player player, Player.Events events) { updateKeepScreenOn(); }
             @Override public void onIsPlayingChanged(boolean playing) {
                 state.updateUsage(active, playing);
+                if(plexPlayback!=null && selected!=null && selected.isPlex()) plexPlayback.playing(playing);
                 if (!playing) saveProgress();
                 MediaItem current = player.getCurrentMediaItem();
                 if (playing && active && !historyRecorded && selected != null && current != null
@@ -97,13 +101,23 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             @Override public void onPlaybackStateChanged(int playbackState) {
                 if (playbackState == Player.STATE_READY) progressReady = true;
                 if (playbackState == Player.STATE_ENDED) {
+                    if(selected!=null && selected.isPlex()) plexPlayback.ended();
                     saveProgress(); controls.setPlaying(false); controls.show(); updateControls();
                 }
             }
             @Override public void onPlayerError(PlaybackException error) {
+                if(selected!=null && selected.isPlex()) {
+                    if(plexPlayback.fallback(error)) return;
+                    plexPlayback.failed(); deny("Plex playback failed ("+error.getErrorCodeName()+"). Reopen the episode to use Plex's latest position."); return;
+                }
                 resumeAt = player.getCurrentPosition(); resumePlaying = player.getPlayWhenReady();
                 deny("This stream could not play (" + error.getErrorCodeName() + "). Retry resolves the same approved video again.");
             }
+        });
+        plexPlayback=new PlexPlayback(this,state,player,new PlexPlayback.Host() {
+            public void loaded() { loading=false; kind="Plex"; messagePanel.setVisibility(View.GONE); controls.show(); updateControls(); loadPlexRail(false); }
+            public void failed(String reason) { deny(reason); }
+            public void info(String text) { android.widget.Toast.makeText(PlayerActivity.this,text,android.widget.Toast.LENGTH_SHORT).show(); }
         });
         controls = new PlayerControls(this, state, new PlayerControls.Actions() {
             public void back() { finish(); }
@@ -120,7 +134,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
             public void menu(View anchor) { showMenu(anchor); }
             public void seek(long position) {
                 if (active && selected != null && state.policy.allows(selected.id, selected.channelId) && !state.expired())
-                    player.seekTo(position);
+                    if(selected.isPlex()) plexPlayback.seek(position); else player.seekTo(position);
             }
             public void play(VideoEntry entry) { PlayerActivity.this.play(entry); }
             public void more() { loadMore(); }
@@ -158,6 +172,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     }
     @Override protected void onPause() {
         saveProgress();
+        if(selected!=null && selected.isPlex()) { plexPlayback.stop(); player.stop(); player.clearMediaItems(); }
         LazyImages.setActive(this, false);
         active = false; updateKeepScreenOn(); handler.removeCallbacks(clock);
         if (player.getMediaItemCount() > 0) resumeAt = player.getCurrentPosition();
@@ -174,7 +189,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     @Override protected void onDestroy() {
         active = false; updateKeepScreenOn();
         handler.removeCallbacksAndMessages(null); controls.stop();
-        playerView.setPlayer(null); player.release(); super.onDestroy();
+        plexPlayback.close(); playerView.setPlayer(null); player.release(); super.onDestroy();
     }
     private void updateKeepScreenOn() {
         int playbackState = player.getPlaybackState();
@@ -191,14 +206,25 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         if (duration < 0) duration = selected.durationSeconds * 1000L;
         controls.update(selected, Math.max(0, player.getCurrentPosition()), duration, state.isFavorite(selected.id));
     }
-    private void refreshRail() { controls.setVideos(state.allowedEntries()); }
+    private void refreshRail() {
+        java.util.List<VideoEntry> rows;
+        if(selected!=null && selected.isPlex()) rows=state.plex.rail(selected.channelId);
+        else { rows=state.allowedEntries(); rows.removeIf(VideoEntry::isPlex); }
+        controls.setVideos(rows,selected!=null && selected.isPlex()?state.plex.canLoadRail(selected.channelId):state.canLoadMore(null));
+    }
     private void loadMore() {
+        if(selected!=null && selected.isPlex()) { loadPlexRail(true); return; }
         state.loadMoreAllowed(null, error -> {
             if (!isDestroyed() && active) {
                 refreshRail();
                 if (!error.isEmpty()) android.widget.Toast.makeText(this, error, android.widget.Toast.LENGTH_SHORT).show();
             }
         });
+    }
+    private void loadPlexRail(boolean more) {
+        if(selected==null || !selected.isPlex()) return;
+        String id=selected.id,show=selected.channelId;
+        state.plex.loadRail(show,more,()->{ if(active && !isDestroyed() && selected!=null && selected.id.equals(id)) refreshRail(); });
     }
     private void showMenu(View anchor) {
         if (selected == null) return;
@@ -209,14 +235,15 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         menu.getMenu().add("Time left today · Full app: " + state.timers.remainingLabel(
                 dev.trustedvideos.proof.core.TimerSchedule.Type.APP)).setEnabled(false);
         menu.getMenu().add("Audio language").setOnMenuItemClickListener(item -> { chooseAudio(); return true; });
+        if(selected.isPlex()) menu.getMenu().add("Subtitles").setOnMenuItemClickListener(item->{ choosePlexTrack(3); return true; });
         if (state.testRemainingMs() >= 0)
             menu.getMenu().add("Proof timer left: " + Ui.duration(state.testRemainingMs())).setEnabled(false);
         menu.getMenu().add(state.isFavorite(selected.id) ? "Remove favorite" : "Add favorite")
                 .setOnMenuItemClickListener(item -> { saveProgress(); state.toggleFavorite(selected.id); return true; });
-        menu.getMenu().add("Block this video").setOnMenuItemClickListener(item -> {
+        menu.getMenu().add(selected.isPlex()?"Block this episode":"Block this video").setOnMenuItemClickListener(item -> {
             showBlock(false); return true;
         });
-        menu.getMenu().add("Block this channel").setOnMenuItemClickListener(item -> {
+        menu.getMenu().add(selected.isPlex()?"Block this show":"Block this channel").setOnMenuItemClickListener(item -> {
             showBlock(true); return true;
         });
         menu.setOnDismissListener(ignored -> controls.holdMenu(audioDialog != null && audioDialog.isShowing())); menu.show();
@@ -255,6 +282,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     private void retry() { if (selected != null) startPlayback(selected, requestedAudio, resumeAt, resumePlaying); }
     private void chooseAudio() {
         if (!active || selected == null) return;
+        if(selected.isPlex()) { choosePlexTrack(2); return; }
         if (audioOptions.isEmpty()) {
             audioDialog = new android.app.AlertDialog.Builder(this).setTitle("Audio language")
                     .setMessage("This video has one default audio track. Language information is unavailable.")
@@ -272,9 +300,22 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
                 }).setNegativeButton("Cancel", null).create();
         audioDialog.setOnDismissListener(dialog -> controls.holdMenu(false)); audioDialog.show();
     }
+    private void choosePlexTrack(int type) {
+        java.util.List<dev.trustedvideos.proof.plex.PlexApi.Stream> tracks=plexPlayback.streams(type);
+        java.util.List<String> labels=new java.util.ArrayList<>(); if(type==3) labels.add("Off");
+        tracks.forEach(t->labels.add(t.label()));
+        if(labels.isEmpty()) { audioDialog=new android.app.AlertDialog.Builder(this).setTitle("Audio language").setMessage("The original audio track is selected.").setPositiveButton("OK",null).show(); return; }
+        audioDialog=new android.app.AlertDialog.Builder(this).setTitle(type==3?"Subtitles":"Audio language")
+                .setItems(labels.toArray(new String[0]),(d,w)->{
+                    String id=type==3 && w==0?"0":tracks.get(type==3?w-1:w).id();
+                    plexPlayback.select(type==2?id:null,type==3?id:null);
+                }).setNegativeButton("Cancel",null).show();
+        audioDialog.setOnDismissListener(d->controls.holdMenu(false));
+    }
     private void startPlayback(VideoEntry entry, String audioId, long position, boolean shouldPlay) {
         if (!active || !state.pinSet()) return;
         saveProgress(); progressReady = false;
+        plexPlayback.stop();
         requestedAudio = audioId; resumeAt = position; resumePlaying = shouldPlay;
         audioOptions = java.util.List.of(); selectedAudio = "";
         state.updateUsage(true, player.isPlaying()); player.stop(); player.clearMediaItems();
@@ -285,6 +326,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         selected = entry;
         updateControls(); refreshRail(); controls.show(); loading = true; kind = ""; final long serial = ++request;
         message.setText("Loading " + entry.title + "…"); messagePanel.setVisibility(View.VISIBLE);
+        if(entry.isPlex()) { plexPlayback.start(entry,shouldPlay,()->gate.accept(ticket,entry.id,entry.channelId,!state.expired())); return; }
         pending = state.worker.submit(() -> {
             try {
                 ResolvedPlayback resolved = state.sources.resolve(entry, state.forceSplit(), audioId);
@@ -324,6 +366,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
     }
     private void deny(String reason) {
         saveProgress(); progressReady = false;
+        plexPlayback.stop();
         gate.cancel(); request++; loading = false;
         if (pending != null) pending.cancel(true);
         player.stop(); player.clearMediaItems();
@@ -331,7 +374,7 @@ public final class PlayerActivity extends androidx.appcompat.app.AppCompatActivi
         message.setText(reason); messagePanel.setVisibility(View.VISIBLE); controls.setPlaying(false); controls.show();
     }
     private void saveProgress() {
-        if (!progressReady || selected == null || player.getMediaItemCount() == 0 || player.isCurrentMediaItemLive()) return;
+        if (!progressReady || selected == null || selected.isPlex() || player.getMediaItemCount() == 0 || player.isCurrentMediaItemLive()) return;
         long position = Math.max(0, player.getCurrentPosition()), duration = player.getDuration();
         state.progress.save(selected.id, position, duration, player.getPlaybackState() == Player.STATE_ENDED);
         resumeAt = position;

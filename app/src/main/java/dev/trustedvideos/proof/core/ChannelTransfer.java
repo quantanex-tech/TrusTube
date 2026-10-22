@@ -107,6 +107,7 @@ public final class ChannelTransfer {
     public static int merge(PermissionPolicy policy, List<Channel> channels) {
         synchronized (policy) {
         java.util.Set<String> merged = policy.channels();
+        merged.removeIf(id -> !PermissionPolicy.validChannelId(id));
         for (Channel channel : channels) merged.add(channel.id);
         if (merged.size() > MAX_CHANNELS) throw new IllegalArgumentException("Import would exceed 2,000 subscribed channels.");
         int added = 0;

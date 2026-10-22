@@ -95,10 +95,10 @@ final class Ui {
         PopupMenu menu = new PopupMenu(activity, anchor);
         menu.getMenu().add(state.isFavorite(entry.id) ? "Remove favorite" : "Add favorite")
                 .setOnMenuItemClickListener(item -> { state.toggleFavorite(entry.id); return true; });
-        menu.getMenu().add("Block this video").setOnMenuItemClickListener(item -> {
+        menu.getMenu().add(entry.isPlex()?"Block this episode":"Block this video").setOnMenuItemClickListener(item -> {
             confirmBlock(activity, state, entry, false, blocked); return true;
         });
-        menu.getMenu().add("Block this channel").setOnMenuItemClickListener(item -> {
+        menu.getMenu().add(entry.isPlex()?"Block this show":"Block this channel").setOnMenuItemClickListener(item -> {
             confirmBlock(activity, state, entry, true, blocked); return true;
         });
         if (dismissed != null) menu.setOnDismissListener(ignored -> dismissed.run());
@@ -106,7 +106,7 @@ final class Ui {
         return menu;
     }
     static AlertDialog confirmBlock(Activity activity, ProofState state, VideoEntry entry, boolean channel, Runnable blocked) {
-        return new AlertDialog.Builder(activity).setTitle(channel ? "Block this channel?" : "Block this video?")
+        return new AlertDialog.Builder(activity).setTitle(channel ? entry.isPlex()?"Block this show?":"Block this channel?" : entry.isPlex()?"Block this episode?":"Block this video?")
                 .setMessage((channel ? entry.channelName : entry.title) + " will be hidden. Only a parent can restore it.")
                 .setNegativeButton("Cancel", null).setPositiveButton("Block", (dialog, which) -> {
                     if (channel) state.blockChannel(entry.channelId); else state.blockVideo(entry.id);
@@ -170,6 +170,6 @@ final class Ui {
     }
     static void image(Activity activity, ProofState state, ImageView view, String url) {
         if (images == null) images = new ImageCache(activity.getApplicationContext());
-        LazyImages.bind(activity, view, url, images);
+        LazyImages.bind(activity, view, url, url != null && url.startsWith("plex-art:") ? state.plexImages : images);
     }
 }

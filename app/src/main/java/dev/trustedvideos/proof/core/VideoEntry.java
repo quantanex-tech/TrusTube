@@ -3,6 +3,7 @@ package dev.trustedvideos.proof.core;
 
 public final class VideoEntry {
     public final String id, channelId, channelName, title, thumbnail;
+    public boolean isPlex() { return MediaKey.plex(id) != null; }
     public final long durationSeconds;
     public final long uploadedAtMs;
 

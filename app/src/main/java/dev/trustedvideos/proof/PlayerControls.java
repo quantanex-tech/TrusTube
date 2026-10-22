@@ -42,6 +42,7 @@ final class PlayerControls extends FrameLayout {
     private boolean playing, showing = true, scrubbing;
     private long duration;
     private String videoId = "";
+    private boolean plex;
     private final Runnable autoHide = new Runnable() {
         @Override public void run() {
             if (!playing || scrubbing) return;
@@ -115,6 +116,7 @@ final class PlayerControls extends FrameLayout {
     void update(VideoEntry entry, long position, long total, boolean favorite) {
         duration = Math.max(0, total);
         if (entry != null) {
+            plex=entry.isPlex();
             title.setText(entry.title + " · " + entry.channelName);
             if (!videoId.equals(entry.id)) {
                 videoId = entry.id; avatar.setImageResource(R.drawable.ic_channels);
@@ -128,7 +130,7 @@ final class PlayerControls extends FrameLayout {
         remaining.setText(Ui.duration(Math.max(0, duration - position)));
         remaining.setContentDescription("Video time remaining " + remaining.getText());
     }
-    void setVideos(List<VideoEntry> entries) {
+    void setVideos(List<VideoEntry> entries,boolean more) {
         int x = railScroll.getScrollX(); rail.removeAllViews();
         for (VideoEntry entry : entries) {
             if (entry.id.equals(videoId)) continue;
@@ -136,7 +138,7 @@ final class PlayerControls extends FrameLayout {
             LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(Ui.dp(activity, 142), -2);
             params.setMargins(0, 0, Ui.dp(activity, 20), 0); rail.addView(card, params);
         }
-        if (state.canLoadMore(null)) rail.addView(Ui.button(activity, "More videos", actions::more), new LinearLayout.LayoutParams(Ui.dp(activity, 130), Ui.dp(activity, 78)));
+        if (more) rail.addView(Ui.button(activity, "More videos", actions::more), new LinearLayout.LayoutParams(Ui.dp(activity, 130), Ui.dp(activity, 78)));
         railScroll.post(() -> railScroll.scrollTo(x, 0));
     }
     void setPlaying(boolean value) {

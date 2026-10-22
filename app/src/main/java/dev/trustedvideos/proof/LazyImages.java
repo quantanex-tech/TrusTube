@@ -50,7 +50,7 @@ final class LazyImages implements ViewTreeObserver.OnPreDrawListener,
         if (previous != null) previous.dispose();
         view.setTag(R.id.image_binding, null);
         view.setTag(url);
-        if (!ImageCache.allowed(url)) return;
+        if (!cache.accepts(url)) return;
         LazyImages images = forActivity(activity);
         Binding binding = images.new Binding(view, url, cache);
         view.setTag(R.id.image_binding, binding);

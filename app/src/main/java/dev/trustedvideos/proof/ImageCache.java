@@ -40,6 +40,8 @@ final class ImageCache {
     private final Handler main = new Handler(Looper.getMainLooper());
     interface Fetcher { Bitmap fetch(String url) throws Exception; }
     private final Fetcher fetcher;
+    private final boolean memoryOnly;
+    private final java.util.function.Predicate<String> accepts;
     interface Subscription { void cancel(); }
     private static final Subscription NONE = () -> {};
     private final class Load implements Subscription {
@@ -73,7 +75,11 @@ final class ImageCache {
             .followRedirects(false).callTimeout(15, TimeUnit.SECONDS).build();
 
     ImageCache(Context context) { this(new File(context.getCacheDir(), "artwork-v1"), null); }
-    ImageCache(File directory, Fetcher fetcher) { this.directory = directory; this.fetcher = fetcher; }
+    ImageCache(File directory, Fetcher fetcher) { this(directory,fetcher,false,ImageCache::allowed); }
+    ImageCache(File directory, Fetcher fetcher,boolean privateMemory,java.util.function.Predicate<String> accepts) {
+        this.directory=directory; this.fetcher=fetcher; memoryOnly=privateMemory; this.accepts=accepts;
+    }
+    boolean accepts(String key) { return accepts.test(key); }
     static boolean allowed(String url) {
         if (url == null || url.isEmpty()) return false;
         try {
@@ -83,7 +89,7 @@ final class ImageCache {
         } catch (RuntimeException error) { return false; }
     }
     Subscription load(String url, Consumer<Bitmap> callback) {
-        if (!allowed(url)) return NONE;
+        if (!accepts(url)) return NONE;
         Bitmap cached = memory.get(url);
         if (cached != null) { callback.accept(cached); return NONE; }
         synchronized (pending) {
@@ -100,11 +106,11 @@ final class ImageCache {
         try {
             if (job.cancelled) return;
             File file = new File(directory, key(job.url) + ".png");
-            if (file.isFile() && System.currentTimeMillis() - file.lastModified() < MAX_AGE)
+            if (!memoryOnly && file.isFile() && System.currentTimeMillis() - file.lastModified() < MAX_AGE)
                 bitmap = BitmapFactory.decodeFile(file.getPath());
             if (bitmap == null) {
                 bitmap = fetcher == null ? download(job) : fetcher.fetch(job.url);
-                if (bitmap != null && !job.cancelled) write(file, bitmap);
+                if (!memoryOnly && bitmap != null && !job.cancelled) write(file, bitmap);
             } else file.setLastModified(System.currentTimeMillis());
             if (bitmap != null && !job.cancelled) memory.put(job.url, bitmap);
         } catch (Exception ignored) { /* Keep placeholders on network/storage failure. */ }
@@ -161,6 +167,10 @@ final class ImageCache {
             options.inJustDecodeBounds = false;
             return BitmapFactory.decodeByteArray(bytes, 0, bytes.length, options);
         }
+    }
+    void clear() {
+        synchronized(pending) { for(Job job:new ArrayList<>(pending.values())) for(Load load:new ArrayList<>(job.loads)) load.cancel(); }
+        memory.evictAll();
     }
     void close() {
         synchronized (pending) {

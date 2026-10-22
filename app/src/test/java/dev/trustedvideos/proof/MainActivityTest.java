@@ -402,7 +402,7 @@ public class MainActivityTest {
             });
             controls.setBackgroundColor(android.graphics.Color.BLACK);
             activity.setContentView(controls);
-            controls.update(entry, 30000, 120000, false); controls.setVideos(state.allowedEntries());
+            controls.update(entry, 30000, 120000, false); controls.setVideos(state.allowedEntries(),state.canLoadMore(null));
             View root = activity.getWindow().getDecorView();
             root.measure(View.MeasureSpec.makeMeasureSpec(2220, View.MeasureSpec.EXACTLY),
                     View.MeasureSpec.makeMeasureSpec(1080, View.MeasureSpec.EXACTLY));
@@ -555,13 +555,13 @@ public class MainActivityTest {
         try (ActivityController<MainActivity> controller = Robolectric.buildActivity(MainActivity.class).setup()) {
             MainActivity activity = controller.get(); View root = activity.getWindow().getDecorView();
             unlockParent(root, state);
-            findText(root, "Export subscribed channels").performClick();
+            findText(root, "Export YouTube channels").performClick();
             var started = Shadows.shadowOf(activity).getNextStartedActivityForResult();
             assertEquals(android.content.Intent.ACTION_CREATE_DOCUMENT, started.intent.getAction());
             assertEquals("application/json", started.intent.getType());
             controller.pause().resume();
             assertNotNull(findText(root, "Unlock parent settings"));
-            assertNull(findText(root, "Import subscribed channels"));
+            assertNull(findText(root, "Import YouTube channels"));
             ReflectionHelpers.setField(activity, "pendingImport", incoming);
             root.findViewWithTag(MainActivity.Tab.HOME).performClick();
             unlockParent(root, state); findText(root, "Review channel import (1)").performClick();
