@@ -56,6 +56,7 @@ public class PlexRevalidationTest {
                 case "/api/v2/user" -> new PlexApi.Reply(200,"{\"id\":2,\"restricted\":true}");
                 case "/identity" -> new PlexApi.Reply(200,"{\"MediaContainer\":{\"machineIdentifier\":\"server\"}}");
                 case "/library/sections" -> new PlexApi.Reply(200,"{\"MediaContainer\":{\"Directory\":[{\"key\":1,\"type\":\"show\"}]}}");
+                case "/library/metadata/10/allLeaves" -> new PlexApi.Reply(200,"{\"MediaContainer\":{\"Metadata\":[],\"totalSize\":0}}");
                 case "/library/sections/1/all" -> new PlexApi.Reply(200,"{\"MediaContainer\":{\"Metadata\":[{\"ratingKey\":10,\"type\":\"show\",\"title\":\"Show\"}],\"totalSize\":1}}");
                 default -> throw new AssertionError(uri.getPath());
             };
@@ -65,7 +66,7 @@ public class PlexRevalidationTest {
         assertEquals(saved,state.plex.session()); assertNotNull(state.plex.show(show));
         // Discovering the show cannot resurrect an old episode grant without exact metadata.
         assertFalse(state.policy.allows(episode,show));
-        assertEquals(List.of("/api/v2/user:ACCOUNT","/identity:NONE","/library/sections:SERVER","/library/sections/1/all:SERVER"),requests);
+        assertEquals(List.of("/api/v2/user:ACCOUNT","/identity:NONE","/library/sections:SERVER","/library/sections/1/all:SERVER","/library/metadata/10/allLeaves:SERVER"),requests);
     }
     @Test public void deniedSavedChildStaysHiddenAndRequiresExplicitParentRetry() throws Exception {
         AtomicInteger requests=new AtomicInteger();

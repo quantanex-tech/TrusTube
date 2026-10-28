@@ -28,6 +28,7 @@ import org.json.JSONObject;
 
 public final class ProofState {
     public static final int WATCH_HISTORY_LIMIT = 50;
+    static final int HOME_RESTORE_LIMIT = 100;
     final PlexLibrary plex;
     final ImageCache plexImages;
     private final DailyMix dailyMix;
@@ -91,7 +92,9 @@ public final class ProofState {
         } catch (Exception ignored) { watchHistory.clear(); }
             List<String> mixOrder = new ArrayList<>();
         try { JSONArray a=new JSONArray(prefs.getString("homeMixOrder","[]")); for(int i=0;i<a.length();i++) mixOrder.add(a.getString(i)); } catch(Exception ignored) { }
-        dailyMix=new DailyMix(prefs.getString("homeMixDay",""),prefs.getLong("homeMixSeed",0),mixOrder);
+        // Old mixes contained show identities. Rebuild once with exact episode identities.
+        boolean episodeMix=prefs.getInt("homeMixVersion",0)>=2;
+        dailyMix=new DailyMix(episodeMix?prefs.getString("homeMixDay",""):"",prefs.getLong("homeMixSeed",0),episodeMix?mixOrder:List.of());
         plex=new PlexLibrary(context,this);
         plexImages=PlexArtwork.cache(context,this);
     }
@@ -276,24 +279,35 @@ public final class ProofState {
     synchronized void plexShow(String id,String title,String art) {
         channelNames.put(id,title); channelAvatars.put(id,art); policy.approve(id);
     }
-    synchronized void plexEpisode(VideoEntry entry) {
-        catalog.put(entry.id,entry); policy.verifyEpisode(entry.id); saveCatalog();
+    synchronized void plexEpisode(VideoEntry entry) { plexEpisodes(List.of(entry)); }
+    synchronized void plexEpisodes(List<VideoEntry> entries) {
+        for(VideoEntry entry:entries) { catalog.put(entry.id,entry); policy.verifyEpisode(entry.id); }
+        if(!entries.isEmpty()) saveCatalog();
     }
     void clearPlexGrants() { policy.clearPlex(); }
     void plexChanged() { if(plex.session()==null) plexImages.clear(); changed(); }
-    synchronized List<String> homeMix(boolean reshuffle) {
-        List<String> yt=new ArrayList<>(),tv=new ArrayList<>();
-        for(VideoEntry e:allowedEntries()) if(!e.isPlex()) yt.add(e.id);
-        for(String key:channelNames.keySet()) if(MediaKey.plex(key)!=null && policy.allowsChannel(key)) tv.add(key);
-        List<String> order=dailyMix.update(java.time.LocalDate.now().toString(),java.util.concurrent.ThreadLocalRandom.current().nextLong(),yt,tv,reshuffle);
-        prefs.edit().putString("homeMixDay",dailyMix.day()).putLong("homeMixSeed",dailyMix.seed()).putString("homeMixOrder",new JSONArray(dailyMix.savedOrder()).toString()).apply();
-        return order;
+    List<String> homeMix(boolean reshuffle) {
+        Set<String> candidates=plex.homeCandidates();
+        synchronized(this) {
+            List<String> yt=new ArrayList<>(),tv=new ArrayList<>();
+            for(VideoEntry e:allowedEntries()) { if(e.isPlex()) { if(candidates.contains(e.id)) tv.add(e.id); } else yt.add(e.id); }
+            List<String> order=dailyMix.update(java.time.LocalDate.now().toString(),java.util.concurrent.ThreadLocalRandom.current().nextLong(),yt,tv,reshuffle);
+            prefs.edit().putInt("homeMixVersion",2).putString("homeMixDay",dailyMix.day()).putLong("homeMixSeed",dailyMix.seed()).putString("homeMixOrder",new JSONArray(dailyMix.savedOrder()).toString()).apply();
+            return order;
+        }
     }
     synchronized List<VideoEntry> savedPlexEntries() {
-        java.util.LinkedHashSet<String> ids=new java.util.LinkedHashSet<>(watchHistory); ids.addAll(favorites.keySet());
+        java.util.LinkedHashSet<String> ids=new java.util.LinkedHashSet<>(watchHistory); ids.addAll(favorites.keySet()); ids.addAll(savedHomePlexKeys(HOME_RESTORE_LIMIT));
         List<VideoEntry> rows=new ArrayList<>();
         for(String id:ids) { VideoEntry e=catalog.get(id); if(e!=null && e.isPlex()) rows.add(e); }
         return rows;
+    }
+    synchronized List<String> savedHomePlexKeys(int limit) {
+        List<String> keys=new ArrayList<>();
+        for(String key:dailyMix.savedOrder()) if(MediaKey.plex(key)!=null && MediaKey.playable(key)) {
+            if(keys.size()>=limit) break; keys.add(key);
+        }
+        return keys;
     }
     void reshuffle() { homeMix(true); changed(); }
     public void subscribe(Runnable listener) { listeners.add(listener); }

@@ -235,20 +235,15 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         int width=cards.getWidth()>0?cards.getWidth():getResources().getDisplayMetrics().widthPixels;
         int columns=Math.max(1,Math.min(3,width/Ui.dp(this,320))); LinearLayout row=null; int shown=0;
         for(String id:entries) {
-            View card;
-            if(MediaKey.plex(id)!=null) {
-                card=PlexShowCard.create(this,state,id,this::play,()->openShow(id));
-            } else {
-                VideoEntry e=state.find(id); if(e==null) continue;
-                card=Ui.card(this,state,e,false,()->play(e));
-            }
+            VideoEntry e=state.find(id); if(e==null) continue;
+            View card=Ui.card(this,state,e,false,()->play(e));
             if(shown%columns==0) { row=new LinearLayout(this); cards.addView(row); }
             LinearLayout.LayoutParams p=new LinearLayout.LayoutParams(0,-2,1); p.setMargins(Ui.dp(this,4),0,Ui.dp(this,4),Ui.dp(this,10));
             row.addView(card,p); shown++;
         }
         if(row!=null && shown%columns!=0) for(int i=shown%columns;i<columns;i++) row.addView(new View(this),new LinearLayout.LayoutParams(0,1,1));
         if(entries.isEmpty()) cards.addView(Ui.text(this,"Ask a parent to add YouTube channels or connect Plex TV.",17,false));
-        if(state.canLoadMore(null) || state.plex.hasMore()) cards.addView(Ui.button(this,"Load more",this::loadMore));
+        if(state.canLoadMore(null) || state.plex.hasMoreHome()) cards.addView(Ui.button(this,"Load more",this::loadMore));
     }
     private void openShow(String id) { tab=Tab.CHANNELS; selectedChannel=id; selectedSeason=null; browsing=null; buildPage(); }
     private void renderShow() {
@@ -341,7 +336,7 @@ public final class MainActivity extends androidx.appcompat.app.AppCompatActivity
         if(state.appExpired()) return;
         if(tab==Tab.CHANNELS && selectedChannel==null) { state.plex.loadMore(); return; }
         if(MediaKey.plex(selectedChannel)!=null) { loadPlexEpisodes(true); return; }
-        if(tab==Tab.HOME) state.plex.loadMore();
+        if(tab==Tab.HOME) state.plex.loadHomeMore();
         if (state.appExpired() || tab == Tab.PARENT || tab == Tab.LIBRARY || state.loadingMore()
                 || tab == Tab.CHANNELS && selectedChannel == null) return;
         state.loadMoreAllowed(selectedChannel, text -> {

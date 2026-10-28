@@ -14,6 +14,10 @@ import java.util.function.Consumer;
 /** Runtime grants come only from the selected child's fresh responses, never saved catalog data. */
 final class PlexLibrary {
     static final long VALID_MS=30_000;
+    static final int HOME_SHOW_BATCH=10, HOME_EPISODE_PAGE=4;
+    private record HomeCursor(int next,boolean more) { }
+    private final Map<String,HomeCursor> homeCursors=new HashMap<>();
+    private boolean homeLoading;
     final PlexStore store;
     final PlexApi api;
     private final ProofState state;
@@ -51,8 +55,22 @@ final class PlexLibrary {
     static String key(PlexApi.Session s,String type,String id) { return MediaKey.key(s.childId(),s.serverId(),type,id); }
     synchronized PlexApi.Session session() { return session; }
     synchronized String status() { return status; }
-    synchronized boolean loading() { return loading; }
+    synchronized boolean loading() { return loading || homeLoading; }
     synchronized boolean hasMore() { return more; }
+    synchronized Set<String> homeCandidates() {
+        Set<String> keys=new HashSet<>(); for(var row:episodes.entrySet()) if(row.getValue().season()>0) keys.add(row.getKey()); return keys;
+    }
+    synchronized boolean hasMoreHome() { return more || !homeShows().isEmpty(); }
+    private List<String> homeShows() {
+        List<String> result=new ArrayList<>();
+        for(String show:shows.keySet()) {
+            HomeCursor cursor=homeCursors.get(show);
+            if(state.policy.allowsChannel(show) && (cursor==null || cursor.more())) result.add(show);
+        }
+        result.sort(Comparator.comparingInt((String k)->homeCursors.containsKey(k)?homeCursors.get(k).next():0)
+                .thenComparing(k->shows.get(k).title(),String.CASE_INSENSITIVE_ORDER).thenComparing(k->k));
+        return result;
+    }
     synchronized Map<String,PlexApi.Entry> shows() { return new LinkedHashMap<>(shows); }
     synchronized PlexApi.Entry show(String key) { return shows.get(key); }
     synchronized boolean allowed(VideoEntry e) {
@@ -71,7 +89,7 @@ final class PlexLibrary {
     }
     void refresh(boolean force) {
         synchronized(this) {
-            if(!store.configured() || loading || !force && requiresParent || !force && session!=null && android.os.SystemClock.elapsedRealtime()-validatedAt<VALID_MS) return;
+            if(!store.configured() || loading || homeLoading || !force && requiresParent || !force && session!=null && android.os.SystemClock.elapsedRealtime()-validatedAt<VALID_MS) return;
             loading=true;
         }
         final long run=epoch;
@@ -99,6 +117,8 @@ final class PlexLibrary {
                 }
                 final PlexApi.Session ready=s; final int cursorIndex=nextIndex,cursorOffset=nextOffset; final boolean remaining=hasMore;
                 // Revalidate saved episode bookmarks in bounded metadata batches, never trust disk grants.
+                List<String> savedHome=state.savedHomePlexKeys(ProofState.HOME_RESTORE_LIMIT);
+                List<String> allSavedHome=state.savedHomePlexKeys(Integer.MAX_VALUE);
                 List<PlexApi.Entry> saved=new ArrayList<>(); List<String> ids=new ArrayList<>();
                 for(VideoEntry e:state.savedPlexEntries()) { MediaKey.Plex k=MediaKey.plex(e.id);
                     if(k.child().equals(s.childId()) && k.server().equals(s.serverId())) ids.add(k.item()); }
@@ -114,24 +134,31 @@ final class PlexLibrary {
                         loadedCounts.clear(); loadedCounts.putAll(freshCounts);
                         validatedAt=android.os.SystemClock.elapsedRealtime(); more=remaining; loading=false; requiresParent=false;
                         status="Connected to Plex · "+ready.childName(); acceptShows(ready,discovered);
-                        for(PlexApi.Entry e:saved) if(e.type().equals("episode") && shows.containsKey(key(ready,"show",e.showId()))) {
-                            try { acceptEpisodes(ready,List.of(e),key(ready,"show",e.showId())); } catch(IOException ignored) { }
+                        List<PlexApi.Entry> restored=new ArrayList<>();
+                        for(PlexApi.Entry e:saved) if(e.type().equals("episode") && shows.containsKey(key(ready,"show",e.showId()))) restored.add(e);
+                        try { acceptEpisodes(ready,restored,null); } catch(IOException ignored) { }
+                        // A saved favorite alone must not strand pages loaded before Home was opened.
+                        if(savedHome.stream().noneMatch(episodes::containsKey)) homeCursors.clear();
+                        else for(String omitted:allSavedHome.subList(Math.min(savedHome.size(),allSavedHome.size()),allSavedHome.size())) {
+                            VideoEntry entry=state.find(omitted);
+                            if(entry!=null && !episodes.containsKey(omitted)) homeCursors.remove(entry.channelId);
                         }
                         if(newConnection) { newConnection=false; state.reshuffle(); }
                     }
                     state.plexChanged();
+                    if(homeCursors.isEmpty()) loadHomeMore();
                 });
             } catch(Exception e) { main.post(()-> { if(run==epoch) fail("Plex could not be verified. Reconnect or retry in Parent."); }); }
         });
     }
     synchronized void connected() {
-        epoch++; validatedAt=0; loading=false; newConnection=true; requiresParent=false; loadedCounts.clear(); session=null;
+        epoch++; validatedAt=0; loading=false; homeLoading=false; homeCursors.clear(); newConnection=true; requiresParent=false; loadedCounts.clear(); session=null;
         state.clearPlexGrants(); state.plexImages.clear(); refresh(true);
     }
     synchronized void disconnect() { store.disconnect(); fail("Plex is not connected"); }
     synchronized void fail(String message) { suspend(message,true); }
     private synchronized void suspend(String message,boolean parentRequired) {
-        epoch++; session=null; validatedAt=0; loading=false; more=false; requiresParent=parentRequired; status=message;
+        epoch++; session=null; validatedAt=0; loading=false; homeLoading=false; more=false; requiresParent=parentRequired; status=message;
         shows.clear(); episodes.clear(); targets.clear(); seasons.clear(); pages.clear(); railPages.clear(); railLoads.clear(); targetLoads.clear();
         state.clearPlexGrants(); state.plexChanged();
     }
@@ -167,8 +194,49 @@ final class PlexLibrary {
                     synchronized(this) { acceptShows(s,p.items()); loadedCounts.put(libraries.get(lib)[0],offset+p.items().size()); showOffset=p.more()?offset+p.items().size():-1;
                         more=p.more() || lib+1<libraries.size(); loading=false; }
                     state.plexChanged();
+                    loadHomeMore();
                 });
             } catch(Exception e) { main.post(()->{ if(run==epoch) fail("Plex is unavailable. Retry in Parent."); }); }
+        });
+    }
+    /** Small episode pages rotate across shows before advancing any show's next page. */
+    void loadHomeMore() {
+        final PlexApi.Session s; final long run; final Map<String,HomeCursor> batch=new LinkedHashMap<>();
+        synchronized(this) {
+            if(loading || homeLoading || session==null || state.appExpired()) return;
+            List<String> candidates=homeShows();
+            if(candidates.isEmpty()) { if(more) loadMore(); return; }
+            for(String show:candidates.subList(0,Math.min(HOME_SHOW_BATCH,candidates.size())))
+                batch.put(show,homeCursors.getOrDefault(show,new HomeCursor(0,true)));
+            homeLoading=true; s=session; run=epoch;
+        }
+        state.plexChanged();
+        state.worker.execute(()-> {
+            try {
+                Map<String,PlexApi.Page> fetched=new LinkedHashMap<>();
+                for(var row:batch.entrySet()) {
+                    if(run!=epoch) return;
+                    if(!state.policy.allowsChannel(row.getKey())) continue;
+                    PlexApi.Page page=api.page(s,"/library/metadata/"+MediaKey.plex(row.getKey()).item()+"/allLeaves",row.getValue().next(),HOME_EPISODE_PAGE);
+                    for(PlexApi.Entry e:page.items()) if(!e.type().equals("episode") || !key(s,"show",e.showId()).equals(row.getKey()))
+                        throw new IOException("Plex Home episode identity changed.");
+                    fetched.put(row.getKey(),page);
+                }
+                main.post(()-> {
+                    if(run!=epoch) return;
+                    try {
+                        synchronized(this) {
+                            for(var row:fetched.entrySet()) {
+                                PlexApi.Page page=row.getValue();
+                                homeCursors.put(row.getKey(),new HomeCursor(batch.get(row.getKey()).next()+page.items().size(),page.more()));
+                                if(state.policy.allowsChannel(row.getKey())) acceptEpisodes(s,page.items(),row.getKey());
+                            }
+                            homeLoading=false;
+                        }
+                        state.plexChanged();
+                    } catch(IOException denied) { fail("Plex Home episodes could not be verified. Retry in Parent."); }
+                });
+            } catch(Exception e) { main.post(()->{ if(run==epoch) fail("Plex Home episodes could not be verified. Retry in Parent."); }); }
         });
     }
     static String art(String key) { return "plex-art:"+key; }
@@ -176,10 +244,14 @@ final class PlexLibrary {
         return new VideoEntry(key(s,"episode",e.id()),key(s,"show",e.showId()),e.show(),e.label(),art(key(s,"episode",e.id())),e.duration()/1000);
     }
     private synchronized void acceptEpisodes(PlexApi.Session s,List<PlexApi.Entry> rows,String show) throws IOException {
+        List<VideoEntry> accepted=new ArrayList<>();
         for(PlexApi.Entry e:rows) {
-            if(!e.type().equals("episode") || !key(s,"show",e.showId()).equals(show)) throw new IOException("Plex episode identity mismatch.");
-            String k=key(s,"episode",e.id()); episodes.put(k,e); state.plexEpisode(video(s,e));
+            String parent=key(s,"show",e.showId());
+            if(!e.type().equals("episode") || (show!=null?!parent.equals(show):!shows.containsKey(parent))) throw new IOException("Plex episode identity mismatch.");
+            accepted.add(video(s,e));
         }
+        for(PlexApi.Entry e:rows) episodes.put(key(s,"episode",e.id()),e);
+        state.plexEpisodes(accepted);
     }
     void target(String show,Consumer<Target> callback) {
         final PlexApi.Session s; final long run;

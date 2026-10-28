@@ -6,6 +6,8 @@ out/
 *.iml
 .toolchain/
 /family-web/
+/output/
+/.playwright-cli/
 
 # Local agent/workflow state and credentials are not publication inputs.
 /.agents/

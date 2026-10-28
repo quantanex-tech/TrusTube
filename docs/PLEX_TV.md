@@ -22,13 +22,17 @@ show blocks narrow that selection; only Parent can restore blocks. Settings and
 connection changes require the existing TrusTube Parent PIN. YouTube channel transfer
 files contain YouTube subscriptions and blocks only; they never contain Plex tokens.
 
-Home makes a daily mix of YouTube video cards and Plex show cards, aiming for equal
+Home makes a daily mix of YouTube videos and individual Plex episodes, aiming for equal
 representation while both sources have enough candidates. **Reshuffle** makes a new
 mix without changing progress or timer usage. Home return, refresh and app restart
-preserve that day's identities and order. New pages append. Temporarily hidden cards
+preserve that day's identities and relative order. Episodes show their show, season and
+episode number, with their own artwork and progress. Episode pages load in small
+batches across shows, so a large show does not fill the candidate list first.
+Regular episodes appear on Home; specials remain in the season chooser. When a
+source finishes loading, its new cards fill gaps in the mix. Temporarily hidden cards
 can return to their saved positions when their source is verified again.
 
-Show cards name the episode they will play. **Continue** resumes or advances through
+Channels retains show browsing. Show cards name the episode they will play. **Continue** resumes or advances through
 the show; **Start** starts the first available regular episode. **Start again** does
 not clear Plex watched history. Specials are available through the season chooser;
 an existing special's resume may also appear on a show card. **Browse episodes**

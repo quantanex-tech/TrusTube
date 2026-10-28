@@ -107,6 +107,7 @@ Craftwork is CC BY 4.0 and retains its separate license. See
 
 ## Plex TV integration candidate
 
-The Android 0.9 test build adds restricted-child Plex TV, a saved daily Home mix,
-and alphabetical mixed Channels. See [Plex TV setup and behavior](docs/PLEX_TV.md).
+The Android 0.10 test build adds individual restricted-child Plex TV episode cards
+to the saved daily Home mix, with alphabetical mixed Channels for show browsing.
+See [Plex TV setup and behavior](docs/PLEX_TV.md).
 This candidate is under device verification and has not been published as a release.
