@@ -63,5 +63,5 @@ access stops playback and hides Plex, with Parent retry/reconnect. Network reque
 in-flight requests and already-buffered frames mean external revocation is not
 instantaneous. Local blocks and connection changes are checked on each media read.
 
-This integration is an unpublished test build. Passing host tests does not establish
+This integration is an alpha test build. Passing host tests does not establish
 complete playback containment or compatibility on every library/device.

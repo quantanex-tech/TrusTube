@@ -105,9 +105,9 @@ Application source: GPL-3.0-or-later, see [LICENSE](LICENSE). Basil artwork by
 Craftwork is CC BY 4.0 and retains its separate license. See
 [third-party notices](THIRD_PARTY_NOTICES.md) and [licenses](licenses/README.md).
 
-## Plex TV integration candidate
+## Plex TV
 
 The Android 0.10 test build adds individual restricted-child Plex TV episode cards
 to the saved daily Home mix, with alphabetical mixed Channels for show browsing.
 See [Plex TV setup and behavior](docs/PLEX_TV.md).
-This candidate is under device verification and has not been published as a release.
+This alpha remains under device verification.
